@@ -56,7 +56,7 @@ const (
 	videoRefreshWindow   = 6 * time.Second
 	videoStaleWindow     = 8 * time.Second
 	audioStaleWindow     = 4 * time.Second
-	mediaRestartWindow   = 25 * time.Second
+	mediaRestartWindow   = 16 * time.Second
 	mediaNudgeCooldown   = 8 * time.Second
 	restartCooldown      = 5 * time.Second
 	videoHoldInterval    = 1 * time.Second
@@ -2264,34 +2264,8 @@ func (rt *CameraRuntime) Start() {
 		now := time.Now()
 		width, height, _ := jpegFrameSize(frame)
 		rt.mu.Lock()
-		cfg := rt.cfg
 		rt.videoMetric = appendMetric(trimMetric(rt.videoMetric, now), now, len(frame))
-		metric := calcMetric(rt.videoMetric)
-		streamMode := rt.streamMode
-		rt.mu.Unlock()
-
-		outFrame := frame
-		if cfg.OverlayName || cfg.OverlayTime || cfg.OverlayDiag {
-			if rendered, err := renderFrameOverlay(frame, frameOverlay{
-				name:       cfg.name(),
-				showName:   cfg.OverlayName,
-				showTime:   cfg.OverlayTime,
-				showDiag:   cfg.OverlayDiag,
-				at:         now,
-				width:      width,
-				height:     height,
-				fps:        metric.Rate,
-				kbps:       metric.Kbps,
-				streamMode: streamMode,
-			}); err == nil {
-				outFrame = rendered
-			} else {
-				log.Printf("camera %s overlay failed: %s", cfg.ID, err)
-			}
-		}
-
-		rt.mu.Lock()
-		rt.latestFrame = append(rt.latestFrame[:0], outFrame...)
+		rt.latestFrame = append(rt.latestFrame[:0], frame...)
 		rt.lastVideoAt = now
 		rt.lastTraffic = now
 		rt.lastFrameBytes = len(frame)
@@ -2302,7 +2276,7 @@ func (rt *CameraRuntime) Start() {
 		clients := keys(rt.videoClients)
 		rt.mu.Unlock()
 		for _, c := range clients {
-			sendDropOld(c.ch, outFrame)
+			sendDropOld(c.ch, frame)
 		}
 	}
 	pp.OnAudio = func(pcm []byte, _ uint16) {
@@ -3140,12 +3114,12 @@ func (rt *CameraRuntime) ServeVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	rt.mu.Unlock()
 	defer rt.removeVideoClient(client)
-	rt.requestStreams(false)
+	rt.recoverVideoForClient()
 	idle := time.NewTimer(videoClientIdle)
 	defer idle.Stop()
 	hold := time.NewTicker(videoHoldInterval)
 	defer hold.Stop()
-	var lastSent []byte
+	var lastRaw []byte
 	var lastRealFrameAt time.Time
 	var lastWriteAt time.Time
 	for {
@@ -3156,11 +3130,12 @@ func (rt *CameraRuntime) ServeVideo(w http.ResponseWriter, r *http.Request) {
 			return
 		case frame := <-client.ch:
 			now := time.Now()
-			lastSent = append(lastSent[:0], frame...)
+			lastRaw = append(lastRaw[:0], frame...)
+			outFrame := rt.frameForOutput(frame, now)
 			lastRealFrameAt = now
 			lastWriteAt = now
 			resetTimer(idle, videoClientIdle)
-			if err := writeMJPEGFrame(w, frame); err != nil {
+			if err := writeMJPEGFrame(w, outFrame); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -3168,12 +3143,12 @@ func (rt *CameraRuntime) ServeVideo(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-hold.C:
 			now := time.Now()
-			if len(lastSent) == 0 || now.Sub(lastRealFrameAt) > videoHoldWindow || now.Sub(lastWriteAt) < videoHoldInterval {
+			if len(lastRaw) == 0 || now.Sub(lastRealFrameAt) > videoHoldWindow || now.Sub(lastWriteAt) < videoHoldInterval {
 				continue
 			}
 			lastWriteAt = now
 			resetTimer(idle, videoClientIdle)
-			if err := writeMJPEGFrame(w, lastSent); err != nil {
+			if err := writeMJPEGFrame(w, rt.frameForOutput(lastRaw, now)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -3181,6 +3156,24 @@ func (rt *CameraRuntime) ServeVideo(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+func (rt *CameraRuntime) recoverVideoForClient() {
+	rt.mu.RLock()
+	connectedAt := rt.connectedAt
+	lastVideoAt := rt.lastVideoAt
+	rt.mu.RUnlock()
+	if !connectedAt.IsZero() {
+		now := time.Now()
+		waitingForFirstFrame := lastVideoAt.IsZero() && now.Sub(connectedAt) > videoStaleWindow
+		staleFrame := !lastVideoAt.IsZero() && now.Sub(lastVideoAt) > videoStaleWindow
+		if waitingForFirstFrame || staleFrame {
+			if rt.restart("client requested stale video") {
+				return
+			}
+		}
+	}
+	rt.requestStreams(false)
 }
 
 func writeMJPEGFrame(w io.Writer, frame []byte) error {
@@ -3194,6 +3187,39 @@ func writeMJPEGFrame(w io.Writer, frame []byte) error {
 		return err
 	}
 	return nil
+}
+
+func (rt *CameraRuntime) frameForOutput(frame []byte, at time.Time) []byte {
+	rt.mu.RLock()
+	cfg := rt.cfg
+	width := rt.frameWidth
+	height := rt.frameHeight
+	metric := calcMetric(rt.videoMetric)
+	streamMode := rt.streamMode
+	rt.mu.RUnlock()
+	if !cfg.OverlayName && !cfg.OverlayTime && !cfg.OverlayDiag {
+		return frame
+	}
+	if width <= 0 || height <= 0 {
+		width, height, _ = jpegFrameSize(frame)
+	}
+	out, err := renderFrameOverlay(frame, frameOverlay{
+		name:       cfg.name(),
+		showName:   cfg.OverlayName,
+		showTime:   cfg.OverlayTime,
+		showDiag:   cfg.OverlayDiag,
+		at:         at,
+		width:      width,
+		height:     height,
+		fps:        metric.Rate,
+		kbps:       metric.Kbps,
+		streamMode: streamMode,
+	})
+	if err != nil {
+		log.Printf("camera %s overlay failed: %s", cfg.ID, err)
+		return frame
+	}
+	return out
 }
 
 type frameOverlay struct {
@@ -3334,9 +3360,25 @@ func (rt *CameraRuntime) ServeSnapshot(w http.ResponseWriter, r *http.Request) {
 	rt.mu.Unlock()
 	rt.requestStreams(false)
 	if len(frame) == 0 || !fresh || state == "offline" || state == "disabled" {
+		rt.recoverVideoForClient()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+			rt.mu.Lock()
+			frame = append(frame[:0], rt.latestFrame...)
+			fresh = !rt.lastVideoAt.IsZero() && time.Since(rt.lastVideoAt) <= videoStaleWindow
+			state, _ = rt.healthLocked()
+			rt.mu.Unlock()
+			if len(frame) > 0 && fresh && state != "offline" && state != "disabled" {
+				break
+			}
+		}
+	}
+	if len(frame) == 0 || !fresh || state == "offline" || state == "disabled" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "snapshot not ready", "camera": rt.cfg.ID, "healthState": state})
 		return
 	}
+	frame = rt.frameForOutput(frame, time.Now())
 	w.Header().Set("content-type", "image/jpeg")
 	w.Header().Set("cache-control", "no-store")
 	w.Header().Set("content-length", strconv.Itoa(len(frame)))
