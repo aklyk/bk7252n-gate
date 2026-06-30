@@ -132,7 +132,7 @@ function normalizeCamera(input, existing = null) {
   camera.height = asInt(input.height, camera.height || 480)
   camera.enabled = asBool(input.enabled, camera.enabled !== false)
   camera.verbose = asBool(input.verbose, Boolean(camera.verbose))
-  camera.ackRepeats = Math.min(9, Math.max(1, asInt(input.ackRepeats, camera.ackRepeats || 2)))
+  camera.ackRepeats = Math.min(9, Math.max(1, asInt(input.ackRepeats, camera.ackRepeats || 3)))
   if (!camera.ip && !camera.discovery) {
     throw Object.assign(new Error('camera ip or discovery address is required'), { statusCode: 400 })
   }
@@ -153,7 +153,7 @@ function publicCameraConfig(camera) {
     height: camera.height || 480,
     enabled: camera.enabled !== false,
     verbose: Boolean(camera.verbose),
-    ackRepeats: camera.ackRepeats || 2,
+    ackRepeats: camera.ackRepeats || 3,
   }
 }
 
@@ -212,7 +212,7 @@ class CameraRuntime {
       psk: this.camera.psk || 'SHIX',
       username: this.camera.username || 'admin',
       password: this.camera.password || '6666',
-      ackRepeats: this.camera.ackRepeats || 2,
+      ackRepeats: this.camera.ackRepeats || 3,
       verbose: Boolean(this.camera.verbose),
     })
 
@@ -673,7 +673,7 @@ function renderWizard(cameraOptions) {
             <label><span>PSK</span><input name="psk" value="SHIX" autocomplete="off"></label>
             <label><span>User</span><input name="username" value="admin" autocomplete="off"></label>
             <label><span>Password</span><input name="password" type="password" value="6666" autocomplete="new-password"></label>
-            <label><span>ACK</span><input name="ackRepeats" type="number" min="1" max="9" value="2"></label>
+            <label><span>ACK</span><input name="ackRepeats" type="number" min="1" max="9" value="3"></label>
             <button type="submit">Add camera</button>
             <output></output>
           </form>

@@ -81,7 +81,7 @@ class PPPP extends EventEmitter {
     this.discoveryMessage = crypt.encrypt(Buffer.from('f1300000', 'hex'), this.cryptoKey)
     this.broadcastTimer = null
     this.closed = false
-    this.ackRepeats = Number.isInteger(this.options.ackRepeats) ? this.options.ackRepeats : 2
+    this.ackRepeats = Number.isInteger(this.options.ackRepeats) ? this.options.ackRepeats : 3
     if (this.ackRepeats < 1) this.ackRepeats = 1
     if (this.ackRepeats > 9) this.ackRepeats = 9
 

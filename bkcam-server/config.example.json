@@ -15,7 +15,7 @@
       "password": "6666",
       "width": 640,
       "height": 480,
-      "ackRepeats": 2,
+      "ackRepeats": 3,
       "enabled": true
     }
   ]
