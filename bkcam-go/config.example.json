@@ -1,0 +1,23 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8088,
+    "bind": "0.0.0.0"
+  },
+  "cameras": [
+    {
+      "id": "a9_entrance",
+      "name": "A9 Entrance",
+      "ip": "192.168.1.203",
+      "discovery": "192.168.1.203",
+      "psk": "SHIX",
+      "username": "admin",
+      "password": "6666",
+      "width": 640,
+      "height": 480,
+      "ackRepeats": 3,
+      "avStream": true,
+      "enabled": true
+    }
+  ]
+}

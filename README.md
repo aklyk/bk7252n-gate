@@ -2,6 +2,8 @@
 
 Local gateway for cheap BK7252N/A9-style PPPP cameras.
 
+![BKCam dashboard](docs/assets/bkcam-dashboard.png)
+
 The main service keeps a local PPPP session to each camera and exposes:
 
 - Safari/Chrome dashboard
@@ -19,9 +21,15 @@ This is intended for cameras you own and operate on your LAN. It does not requir
 ## Quick Start
 
 ```bash
-cd bkcam-server
+cd bkcam-go
 cp config.example.json config.json
-npm start
+go run .
+```
+
+Or from the repository root:
+
+```bash
+make run
 ```
 
 Open:
@@ -64,7 +72,8 @@ For DID prefix `EEE`, the local PPPP PSK is usually `SHIX`.
 
 ## Repository Layout
 
-- `bkcam-server/` - current Node.js gateway and dashboard
+- `bkcam-go/` - main native Go gateway and dashboard
+- `bkcam-server/` - legacy Node.js gateway kept as a reference during the Go migration
 - `PPPP/` - patched JavaScript PPPP client based on A9_PPPP
 - `a9serv/` - small C MJPEG/WAV fallback proxy
 - `pppp-dissector/` - Wireshark dissector and PPPP notes
@@ -87,7 +96,7 @@ The generated snippet uses go2rtc/ffmpeg to restream MJPEG as H.264 and the WAV/
 
 If a camera is already on Wi-Fi, open `/setup` or add it from the API. If a new camera exposes its own AP, connect this computer to that AP, open `/setup`, enter the camera's current AP address/discovery, target Wi-Fi credentials and the final LAN address if you already know it. The wizard sends `set_wifi` over the camera's PPPP Wi-Fi session and saves the matching local camera config. No internet is required.
 
-For multiple cameras, prefer fixed DHCP leases and unicast `discovery` values equal to each camera IP. The PPPP client pins the session to the expected peer so one camera cannot silently occupy another camera card. `avStream` is enabled by default because these cameras often keep video FPS steadier when the AV stream is requested, even if audio playback is off in the browser.
+For multiple cameras, prefer fixed DHCP leases and unicast `discovery` values equal to each camera IP. The PPPP client pins the session to the expected peer so one camera cannot silently occupy another camera card. The Go backend requests video and audio as separate PPPP stream commands; audio is requested only when the browser, WAV endpoint or Frigate/go2rtc opens an audio stream.
 
 UART is not part of the wizard. It is only a manual development/recovery fallback:
 

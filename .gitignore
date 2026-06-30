@@ -7,6 +7,7 @@ __pycache__/
 
 # Local runtime configuration and captures
 bkcam-server/config.json
+bkcam-go/config.json
 *.pcap
 *.pcapng
 *.mjpg
@@ -21,6 +22,7 @@ bkcam-server/config.json
 
 # Local build outputs
 a9serv/pppp
+bkcam-go/bkcam
 dist/
 build/
 coverage/
