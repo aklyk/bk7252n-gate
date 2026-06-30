@@ -208,7 +208,6 @@ class CameraRuntime {
   start() {
     if (this.pppp || this.camera.enabled === false) return
     this.startedAt = Date.now()
-    this.lastError = null
 
     this.pppp = new PPPP({
       broadcastip: this.camera.discovery || this.camera.ip,
@@ -566,7 +565,9 @@ class CameraRuntime {
   health() {
     if (this.camera.enabled === false) return { state: 'disabled', label: 'disabled' }
     if (!this.pppp || !this.connectedAt) {
-      if (this.startedAt) return { state: 'connecting', label: 'connecting' }
+      if (this.startedAt && this.restartCount === 0 && Date.now() - this.startedAt <= 20000) {
+        return { state: 'connecting', label: 'connecting' }
+      }
       return { state: 'offline', label: 'offline' }
     }
     if (!this.lastTrafficAt) return { state: 'connecting', label: 'connecting' }
