@@ -20,6 +20,7 @@
       "overlayName": false,
       "overlayTime": false,
       "overlayDiag": false,
+      "overlaySize": 1,
       "enabled": true
     }
   ]

@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/math/fixed"
@@ -118,6 +119,7 @@ type CameraConfig struct {
 	OverlayName  bool   `json:"overlayName,omitempty"`
 	OverlayTime  bool   `json:"overlayTime,omitempty"`
 	OverlayDiag  bool   `json:"overlayDiag,omitempty"`
+	OverlaySize  int    `json:"overlaySize,omitempty"`
 }
 
 func (c CameraConfig) enabled() bool {
@@ -175,6 +177,16 @@ func (c CameraConfig) videoMode() int {
 		return 2
 	}
 	return 1
+}
+
+func (c CameraConfig) overlaySize() int {
+	if c.OverlaySize < 1 {
+		return 1
+	}
+	if c.OverlaySize > 3 {
+		return 3
+	}
+	return c.OverlaySize
 }
 
 func (c CameraConfig) ackRepeats() int {
@@ -683,6 +695,13 @@ func normalizeCamera(input map[string]any, existing *CameraConfig) (CameraConfig
 	cam.OverlayName = inputBool(input, "overlayName", cam.OverlayName)
 	cam.OverlayTime = inputBool(input, "overlayTime", cam.OverlayTime)
 	cam.OverlayDiag = inputBool(input, "overlayDiag", cam.OverlayDiag)
+	cam.OverlaySize = inputInt(input, "overlaySize", cam.overlaySize())
+	if cam.OverlaySize < 1 {
+		cam.OverlaySize = 1
+	}
+	if cam.OverlaySize > 3 {
+		cam.OverlaySize = 3
+	}
 	cam.AckRepeats = inputInt(input, "ackRepeats", cam.ackRepeats())
 	if cam.AckRepeats < 1 {
 		cam.AckRepeats = 1
@@ -770,7 +789,7 @@ var uiText = map[string]map[string]string{
 		"deviceConfigHelp": "Команды отправляются в стоковую прошивку по Wi-Fi через PPPP JSON. UART не нужен. Пустые поля не меняются.",
 		"deviceConfigWarn": "Разрешение stream влияет на текущую сессию. Для Frigate и dashboard локальный профиль ширины/высоты задается выше.",
 		"name":             "Имя", "cameraIP": "IP камеры", "discovery": "Discovery", "localBind": "Local bind", "psk": "PSK", "user": "Пользователь", "password": "Пароль",
-		"ackRepeats": "ACK repeats", "width": "Ширина", "height": "Высота", "requestAV": "Запрашивать AV stream", "overlayName": "Имя камеры на картинке", "overlayTime": "Дата и время на картинке", "overlayDiag": "Диагностика на картинке", "enabled": "Включена", "save": "Сохранить",
+		"ackRepeats": "ACK repeats", "width": "Ширина", "height": "Высота", "requestAV": "Запрашивать AV stream", "overlayName": "Имя камеры на картинке", "overlayTime": "Дата и время на картинке", "overlayDiag": "Диагностика на картинке", "overlaySize": "Размер оверлея", "overlaySmall": "Мелкий", "overlayMedium": "Средний", "overlayLarge": "Крупный", "enabled": "Включена", "save": "Сохранить",
 		"wizardTitle": "Настройка новой камеры", "wizardMeta": "Мастер полностью локальный и работает, когда ноутбук подключен к AP камеры без интернета.",
 		"wizardStep1": "1. Подготовка", "wizardStep1Text": "Подключите ноутбук к AP камеры или к той же LAN, где камера уже доступна. Оставьте эту страницу открытой с локального сервера.",
 		"wizardStep2": "2. Записать Wi-Fi и сохранить", "wizardStep2Text": "Сервер подключится к текущему адресу камеры, отправит Wi-Fi настройки и сохранит финальный LAN-адрес в локальный конфиг.",
@@ -804,7 +823,7 @@ var uiText = map[string]map[string]string{
 		"deviceConfigHelp": "Commands are sent to stock firmware over Wi-Fi via PPPP JSON. UART is not required. Empty fields are not changed.",
 		"deviceConfigWarn": "The stream resolution affects the current camera session. Frigate/dashboard width and height are set in the local profile above.",
 		"name":             "Name", "cameraIP": "Camera IP", "discovery": "Discovery", "localBind": "Local bind", "psk": "PSK", "user": "User", "password": "Password",
-		"ackRepeats": "ACK repeats", "width": "Width", "height": "Height", "requestAV": "Request AV stream", "overlayName": "Camera name on image", "overlayTime": "Date/time on image", "overlayDiag": "Diagnostics on image", "enabled": "Enabled", "save": "Save",
+		"ackRepeats": "ACK repeats", "width": "Width", "height": "Height", "requestAV": "Request AV stream", "overlayName": "Camera name on image", "overlayTime": "Date/time on image", "overlayDiag": "Diagnostics on image", "overlaySize": "Overlay size", "overlaySmall": "Small", "overlayMedium": "Medium", "overlayLarge": "Large", "enabled": "Enabled", "save": "Save",
 		"wizardTitle": "New camera setup", "wizardMeta": "This wizard is fully local and keeps working when your computer is connected to a camera AP without internet.",
 		"wizardStep1": "1. Prepare", "wizardStep1Text": "Connect this computer to the camera AP or to the same LAN as the camera. Keep this page open from the local server.",
 		"wizardStep2": "2. Write Wi-Fi and save", "wizardStep2Text": "The server reaches the camera at its current address, sends Wi-Fi settings, then stores the final LAN address locally.",
@@ -1043,6 +1062,14 @@ func (a *App) handleAPI(w http.ResponseWriter, r *http.Request, path string) err
 		if ok, _ := result["ok"].(bool); !ok {
 			status = http.StatusConflict
 		}
+		if width, height, ok := targetStreamSize(body); ok {
+			if streamCommandOK(result) {
+				if err := a.setCameraProfileSize(id, width, height); err != nil {
+					return err
+				}
+				result["profile"] = map[string]any{"width": width, "height": height}
+			}
+		}
 		writeJSON(w, status, result)
 	case "reboot":
 		result := rt.Reboot()
@@ -1073,6 +1100,74 @@ func (a *App) runtime(id string) *CameraRuntime {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.runtimes[id]
+}
+
+func targetStreamSize(input map[string]any) (int, int, bool) {
+	mode := 0
+	switch inputString(input, "preset", "") {
+	case "stable320":
+		mode = 2
+	case "quality640":
+		mode = 1
+	case "stop":
+		mode = 0
+	}
+	switch inputString(input, "streamMode", "") {
+	case "qvga":
+		mode = 2
+	case "vga":
+		mode = 1
+	case "stop":
+		mode = 0
+	}
+	switch mode {
+	case 1:
+		return 640, 480, true
+	case 2:
+		return 320, 240, true
+	default:
+		return 0, 0, false
+	}
+}
+
+func streamCommandOK(result map[string]any) bool {
+	commands, _ := result["commands"].([]map[string]any)
+	for _, command := range commands {
+		name := fmt.Sprint(command["name"])
+		if name != "preset.stable320.video" && name != "preset.quality640.video" && name != "stream.video" {
+			continue
+		}
+		switch r := command["result"].(type) {
+		case CommandResult:
+			return r.OK
+		case map[string]any:
+			return asBoolValue(r["ok"], false)
+		}
+	}
+	return false
+}
+
+func (a *App) setCameraProfileSize(id string, width, height int) error {
+	a.mu.Lock()
+	idx := a.cameraIndexLocked(id)
+	if idx == -1 {
+		a.mu.Unlock()
+		return httpErr(http.StatusNotFound, "unknown camera")
+	}
+	if a.config.Cameras[idx].Width != width || a.config.Cameras[idx].Height != height {
+		a.config.Cameras[idx].Width = width
+		a.config.Cameras[idx].Height = height
+		if err := a.saveConfigLocked(); err != nil {
+			a.mu.Unlock()
+			return err
+		}
+	}
+	rt := a.runtimes[id]
+	a.mu.Unlock()
+	if rt != nil {
+		rt.SetProfileSize(width, height)
+	}
+	return nil
 }
 
 func (a *App) sortedRuntimes() []*CameraRuntime {
@@ -1217,6 +1312,7 @@ func (a *App) provisionCamera(body map[string]any, r *http.Request) (map[string]
 		"overlayName":  inputBool(body, "overlayName", existingOverlayName(existing)),
 		"overlayTime":  inputBool(body, "overlayTime", existingOverlayTime(existing)),
 		"overlayDiag":  inputBool(body, "overlayDiag", existingOverlayDiag(existing)),
+		"overlaySize":  inputInt(body, "overlaySize", existingOverlaySize(existing)),
 		"verbose":      inputBool(body, "verbose", existingVerbose(existing)),
 	}
 	setupCamera, err := normalizeCamera(setupInput, existing)
@@ -1367,6 +1463,13 @@ func existingOverlayDiag(c *CameraConfig) bool {
 	return c.OverlayDiag
 }
 
+func existingOverlaySize(c *CameraConfig) int {
+	if c == nil {
+		return 1
+	}
+	return c.overlaySize()
+}
+
 func existingVerbose(c *CameraConfig) bool {
 	if c == nil {
 		return false
@@ -1393,6 +1496,7 @@ func publicConfig(cam CameraConfig) map[string]any {
 		"overlayName":  cam.OverlayName,
 		"overlayTime":  cam.OverlayTime,
 		"overlayDiag":  cam.OverlayDiag,
+		"overlaySize":  cam.overlaySize(),
 		"ackRepeats":   cam.ackRepeats(),
 	}
 }
@@ -2002,7 +2106,12 @@ func renderInput(name, label string, value any, attrs string) string {
 }
 
 func renderSelect(name, label string, options [][2]string) string {
+	return renderSelectValue(name, label, "", options)
+}
+
+func renderSelectValue(name, label string, selected any, options [][2]string) string {
 	var b strings.Builder
+	selectedValue := fmt.Sprint(selected)
 	b.WriteString(`<label><span>`)
 	b.WriteString(htmlValue(label))
 	b.WriteString(`</span><select name="`)
@@ -2011,7 +2120,11 @@ func renderSelect(name, label string, options [][2]string) string {
 	for _, option := range options {
 		b.WriteString(`<option value="`)
 		b.WriteString(htmlValue(option[0]))
-		b.WriteString(`">`)
+		b.WriteString(`"`)
+		if option[0] == selectedValue {
+			b.WriteString(` selected`)
+		}
+		b.WriteString(`>`)
 		b.WriteString(htmlValue(option[1]))
 		b.WriteString(`</option>`)
 	}
@@ -2039,6 +2152,11 @@ func renderCameraConfigForm(camera map[string]any, lang string) string {
       <label class="check"><input name="overlayName" type="checkbox" ` + mapBool(asBoolValue(camera["overlayName"], false), "checked", "") + `><span>` + htmlValue(t("overlayName")) + `</span></label>
       <label class="check"><input name="overlayTime" type="checkbox" ` + mapBool(asBoolValue(camera["overlayTime"], false), "checked", "") + `><span>` + htmlValue(t("overlayTime")) + `</span></label>
       <label class="check"><input name="overlayDiag" type="checkbox" ` + mapBool(asBoolValue(camera["overlayDiag"], false), "checked", "") + `><span>` + htmlValue(t("overlayDiag")) + `</span></label>
+      ` + renderSelectValue("overlaySize", t("overlaySize"), camera["overlaySize"], [][2]string{
+		{"1", t("overlaySmall")},
+		{"2", t("overlayMedium")},
+		{"3", t("overlayLarge")},
+	}) + `
       <label class="check"><input name="enabled" type="checkbox" ` + mapBool(asBoolValue(camera["enabled"], true), "checked", "") + `><span>` + htmlValue(t("enabled")) + `</span></label>
       <button type="submit">` + htmlValue(t("save")) + `</button>
       <output></output>
@@ -2229,6 +2347,13 @@ func (rt *CameraRuntime) UpdateConfig(cfg CameraConfig) {
 	if cfg.enabled() {
 		rt.Start()
 	}
+}
+
+func (rt *CameraRuntime) SetProfileSize(width, height int) {
+	rt.mu.Lock()
+	rt.cfg.Width = width
+	rt.cfg.Height = height
+	rt.mu.Unlock()
 }
 
 func (rt *CameraRuntime) Start() {
@@ -2491,6 +2616,7 @@ func (rt *CameraRuntime) requestStreams(forceVideo bool, videoOnly ...bool) {
 	rt.mu.Lock()
 	pp := rt.pppp
 	now := time.Now()
+	videoMode := rt.cfg.videoMode()
 	wantsVideo := forceVideo || len(rt.videoClients) > 0 || len(rt.latestFrame) == 0 || now.Sub(rt.lastSnapshotDemand) < 10*time.Second
 	wantsAudio := len(rt.audioClients) > 0
 	skipAudio := len(videoOnly) > 0 && videoOnly[0]
@@ -2508,7 +2634,7 @@ func (rt *CameraRuntime) requestStreams(forceVideo bool, videoOnly ...bool) {
 	}
 	sentVideo := false
 	if sendVideo {
-		if err := pp.SendCommand(111, "stream", map[string]any{"video": rt.cfg.videoMode()}); err == nil {
+		if err := pp.SendCommand(111, "stream", map[string]any{"video": videoMode}); err == nil {
 			sentVideo = true
 			rt.mu.Lock()
 			rt.streamMode = "video"
@@ -3194,6 +3320,7 @@ func (rt *CameraRuntime) frameForOutput(frame []byte, at time.Time) []byte {
 	cfg := rt.cfg
 	width := rt.frameWidth
 	height := rt.frameHeight
+	overlaySize := cfg.overlaySize()
 	metric := calcMetric(rt.videoMetric)
 	streamMode := rt.streamMode
 	rt.mu.RUnlock()
@@ -3211,6 +3338,7 @@ func (rt *CameraRuntime) frameForOutput(frame []byte, at time.Time) []byte {
 		at:         at,
 		width:      width,
 		height:     height,
+		scale:      overlaySize,
 		fps:        metric.Rate,
 		kbps:       metric.Kbps,
 		streamMode: streamMode,
@@ -3230,6 +3358,7 @@ type frameOverlay struct {
 	at         time.Time
 	width      int
 	height     int
+	scale      int
 	fps        float64
 	kbps       float64
 	streamMode string
@@ -3272,7 +3401,7 @@ func renderFrameOverlay(frame []byte, opts frameOverlay) ([]byte, error) {
 	bounds := src.Bounds()
 	rgba := image.NewRGBA(bounds)
 	draw.Draw(rgba, bounds, src, bounds.Min, draw.Src)
-	drawTextBlock(rgba, lines, bounds.Min.X+8, bounds.Min.Y+8)
+	drawTextBlock(rgba, lines, bounds.Min.X+8, bounds.Min.Y+8, opts.scale)
 
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, rgba, &jpeg.Options{Quality: 85}); err != nil {
@@ -3281,7 +3410,13 @@ func renderFrameOverlay(frame []byte, opts frameOverlay) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func drawTextBlock(dst draw.Image, lines []string, x, y int) {
+func drawTextBlock(dst draw.Image, lines []string, x, y, scale int) {
+	if scale < 1 {
+		scale = 1
+	}
+	if scale > 3 {
+		scale = 3
+	}
 	face := basicfont.Face7x13
 	ascent := face.Metrics().Ascent.Ceil()
 	lineHeight := face.Metrics().Height.Ceil() + 3
@@ -3294,17 +3429,25 @@ func drawTextBlock(dst draw.Image, lines []string, x, y int) {
 	if maxWidth <= 0 {
 		return
 	}
-	bg := image.Rect(x-4, y-4, x+maxWidth+8, y+lineHeight*len(lines)+4)
+	textBounds := image.Rect(0, 0, maxWidth+2, lineHeight*len(lines)+2)
+	textLayer := image.NewRGBA(textBounds)
+	bg := image.Rect(x-4*scale, y-4*scale, x+(maxWidth+8)*scale, y+(lineHeight*len(lines)+4)*scale)
 	draw.Draw(dst, bg, image.NewUniform(color.NRGBA{R: 0, G: 0, B: 0, A: 170}), image.Point{}, draw.Over)
 	shadow := image.NewUniform(color.NRGBA{R: 0, G: 0, B: 0, A: 220})
 	white := image.NewUniform(color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 	for i, line := range lines {
-		baseline := y + ascent + i*lineHeight
-		shadowText := font.Drawer{Dst: dst, Src: shadow, Face: face, Dot: fixed.P(x+1, baseline+1)}
+		baseline := ascent + i*lineHeight
+		shadowText := font.Drawer{Dst: textLayer, Src: shadow, Face: face, Dot: fixed.P(1, baseline+1)}
 		shadowText.DrawString(line)
-		whiteText := font.Drawer{Dst: dst, Src: white, Face: face, Dot: fixed.P(x, baseline)}
+		whiteText := font.Drawer{Dst: textLayer, Src: white, Face: face, Dot: fixed.P(0, baseline)}
 		whiteText.DrawString(line)
 	}
+	dstRect := image.Rect(x, y, x+textBounds.Dx()*scale, y+textBounds.Dy()*scale)
+	if scale == 1 {
+		draw.Draw(dst, dstRect, textLayer, image.Point{}, draw.Over)
+		return
+	}
+	xdraw.NearestNeighbor.Scale(dst, dstRect, textLayer, textLayer.Bounds(), xdraw.Over, nil)
 }
 
 func (rt *CameraRuntime) ServeAudio(w http.ResponseWriter, r *http.Request, wav bool) {
