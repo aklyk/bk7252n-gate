@@ -17,6 +17,9 @@
       "height": 480,
       "ackRepeats": 3,
       "avStream": true,
+      "overlayName": false,
+      "overlayTime": false,
+      "overlayDiag": false,
       "enabled": true
     }
   ]

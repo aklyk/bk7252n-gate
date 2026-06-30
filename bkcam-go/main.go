@@ -9,8 +9,13 @@ import (
 	"flag"
 	"fmt"
 	"html"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/jpeg"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,6 +27,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
 )
 
 const (
@@ -106,6 +115,9 @@ type CameraConfig struct {
 	Verbose      bool   `json:"verbose"`
 	AckRepeats   int    `json:"ackRepeats"`
 	AvStream     *bool  `json:"avStream,omitempty"`
+	OverlayName  bool   `json:"overlayName,omitempty"`
+	OverlayTime  bool   `json:"overlayTime,omitempty"`
+	OverlayDiag  bool   `json:"overlayDiag,omitempty"`
 }
 
 func (c CameraConfig) enabled() bool {
@@ -254,6 +266,8 @@ type CameraRuntime struct {
 	audioMetric []metricPoint
 
 	lastFrameBytes  int
+	frameWidth      int
+	frameHeight     int
 	streamMode      string
 	lastError       string
 	lastCommand     string
@@ -666,6 +680,9 @@ func normalizeCamera(input map[string]any, existing *CameraConfig) (CameraConfig
 	cam.Enabled = boolPtr(enabled)
 	cam.Verbose = verbose
 	cam.AvStream = boolPtr(avStream)
+	cam.OverlayName = inputBool(input, "overlayName", cam.OverlayName)
+	cam.OverlayTime = inputBool(input, "overlayTime", cam.OverlayTime)
+	cam.OverlayDiag = inputBool(input, "overlayDiag", cam.OverlayDiag)
 	cam.AckRepeats = inputInt(input, "ackRepeats", cam.ackRepeats())
 	if cam.AckRepeats < 1 {
 		cam.AckRepeats = 1
@@ -732,13 +749,14 @@ var uiText = map[string]map[string]string{
 		"dashboard": "Камеры", "setup": "Настройка", "status": "Статус", "setupNew": "Добавить камеру",
 		"overviewMeta": "На главной легкие превью; живой поток и звук открываются в карточке камеры.",
 		"openLive":     "Открыть live", "sound": "Звук", "stop": "Стоп", "reconnectVideo": "Переподключить видео", "snapshot": "Снимок", "rawMJPEG": "MJPEG напрямую", "rawWAV": "WAV напрямую",
-		"video": "Видео", "fps": "FPS", "videoKbps": "Видео kbps", "audio": "Аудио", "clients": "Клиенты", "restarts": "Рестарты", "mode": "Режим", "peer": "Peer",
+		"video": "Видео", "fps": "FPS", "videoKbps": "Видео kbps", "audio": "Аудио", "clients": "Клиенты", "restarts": "Рестарты", "mode": "Режим", "peer": "Peer", "resolution": "Разрешение",
 		"localSettings": "Локальный профиль", "cameraSettings": "Настройки камеры", "maintenance": "Обслуживание",
 		"reconnectSession": "Переподключить сессию", "refreshInfo": "Прочитать параметры", "rebootHardware": "Перезагрузить камеру", "rebootConfirm": "Перезагрузить железо камеры?",
 		"wifiSSID": "Wi-Fi SSID", "wifiPassword": "Пароль Wi-Fi", "reboot": "Перезагрузка", "setWifi": "Записать Wi-Fi",
 		"saved": "Сохранено", "sent": "Отправлено", "writing": "Запись...", "read": "Прочитано", "apply": "Применить", "readFromCamera": "Прочитать из камеры",
 		"autoRead": "Считываю настройки...", "autoReadOk": "Настройки считаны", "autoReadTimeout": "Камера не ответила на чтение",
 		"cameraPreset": "Пресет", "presetStable320": "Стабильный 320x240", "presetQuality640": "Качество 640x480", "presetStop": "Остановить видео", "presetCustom": "Не менять автоматически",
+		"imagePreset": "Картинка", "imageAuto": "Авто по текущему кадру", "imageBalanced": "Обычная", "imageDark": "Темная сцена", "imageGlare": "Меньше пересвета", "imageReset": "Сбросить картинку",
 		"basicDeviceHelp": "Для обычной работы выберите пресет и нужные галочки. Этого достаточно для Safari, dashboard и Frigate.",
 		"localOnlyMode":   "Локальный режим: отключить push фото/видео", "localOnlyHint": "Отключает отправку фото/видео в push-сервис камеры. WAN все равно лучше резать на роутере.",
 		"enableAudioNow": "Запустить звук сейчас", "disableDetectors": "Отключить детекцию движения и звука", "advancedSettings": "Расширенные параметры", "expertSettings": "Экспертные параметры", "rawReadback": "Сырой ответ прошивки",
@@ -752,7 +770,7 @@ var uiText = map[string]map[string]string{
 		"deviceConfigHelp": "Команды отправляются в стоковую прошивку по Wi-Fi через PPPP JSON. UART не нужен. Пустые поля не меняются.",
 		"deviceConfigWarn": "Разрешение stream влияет на текущую сессию. Для Frigate и dashboard локальный профиль ширины/высоты задается выше.",
 		"name":             "Имя", "cameraIP": "IP камеры", "discovery": "Discovery", "localBind": "Local bind", "psk": "PSK", "user": "Пользователь", "password": "Пароль",
-		"ackRepeats": "ACK repeats", "width": "Ширина", "height": "Высота", "requestAV": "Запрашивать AV stream", "enabled": "Включена", "save": "Сохранить",
+		"ackRepeats": "ACK repeats", "width": "Ширина", "height": "Высота", "requestAV": "Запрашивать AV stream", "overlayName": "Имя камеры на картинке", "overlayTime": "Дата и время на картинке", "overlayDiag": "Диагностика на картинке", "enabled": "Включена", "save": "Сохранить",
 		"wizardTitle": "Настройка новой камеры", "wizardMeta": "Мастер полностью локальный и работает, когда ноутбук подключен к AP камеры без интернета.",
 		"wizardStep1": "1. Подготовка", "wizardStep1Text": "Подключите ноутбук к AP камеры или к той же LAN, где камера уже доступна. Оставьте эту страницу открытой с локального сервера.",
 		"wizardStep2": "2. Записать Wi-Fi и сохранить", "wizardStep2Text": "Сервер подключится к текущему адресу камеры, отправит Wi-Fi настройки и сохранит финальный LAN-адрес в локальный конфиг.",
@@ -765,13 +783,14 @@ var uiText = map[string]map[string]string{
 		"dashboard": "Dashboard", "setup": "Setup", "status": "Status", "setupNew": "Set up new camera",
 		"overviewMeta": "Snapshot previews keep the overview light; open a camera for live video and sound.",
 		"openLive":     "Open live", "sound": "Sound", "stop": "Stop", "reconnectVideo": "Reconnect video", "snapshot": "Snapshot", "rawMJPEG": "Raw MJPEG", "rawWAV": "Raw WAV",
-		"video": "Video", "fps": "FPS", "videoKbps": "Video kbps", "audio": "Audio", "clients": "Clients", "restarts": "Restarts", "mode": "Mode", "peer": "Peer",
+		"video": "Video", "fps": "FPS", "videoKbps": "Video kbps", "audio": "Audio", "clients": "Clients", "restarts": "Restarts", "mode": "Mode", "peer": "Peer", "resolution": "Resolution",
 		"localSettings": "Local profile", "cameraSettings": "Camera settings", "maintenance": "Maintenance",
 		"reconnectSession": "Reconnect camera session", "refreshInfo": "Refresh camera info", "rebootHardware": "Restart camera hardware", "rebootConfirm": "Restart camera hardware?",
 		"wifiSSID": "Wi-Fi SSID", "wifiPassword": "Wi-Fi password", "reboot": "Reboot", "setWifi": "Set Wi-Fi",
 		"saved": "Saved", "sent": "Sent", "writing": "Writing...", "read": "Read", "apply": "Apply", "readFromCamera": "Read from camera",
 		"autoRead": "Reading settings...", "autoReadOk": "Settings read", "autoReadTimeout": "Camera did not answer readback",
 		"cameraPreset": "Preset", "presetStable320": "Stable 320x240", "presetQuality640": "Quality 640x480", "presetStop": "Stop video", "presetCustom": "Do not auto-change",
+		"imagePreset": "Image", "imageAuto": "Auto from current frame", "imageBalanced": "Balanced", "imageDark": "Dark scene", "imageGlare": "Less glare", "imageReset": "Reset image",
 		"basicDeviceHelp": "For normal use, choose a preset and the needed checkboxes. This is enough for Safari, dashboard and Frigate.",
 		"localOnlyMode":   "Local mode: disable push photos/videos", "localOnlyHint": "Disables photo/video upload to the camera push service. Router WAN blocking is still recommended.",
 		"enableAudioNow": "Start audio now", "disableDetectors": "Disable motion and sound detection", "advancedSettings": "Advanced settings", "expertSettings": "Expert settings", "rawReadback": "Raw firmware response",
@@ -785,7 +804,7 @@ var uiText = map[string]map[string]string{
 		"deviceConfigHelp": "Commands are sent to stock firmware over Wi-Fi via PPPP JSON. UART is not required. Empty fields are not changed.",
 		"deviceConfigWarn": "The stream resolution affects the current camera session. Frigate/dashboard width and height are set in the local profile above.",
 		"name":             "Name", "cameraIP": "Camera IP", "discovery": "Discovery", "localBind": "Local bind", "psk": "PSK", "user": "User", "password": "Password",
-		"ackRepeats": "ACK repeats", "width": "Width", "height": "Height", "requestAV": "Request AV stream", "enabled": "Enabled", "save": "Save",
+		"ackRepeats": "ACK repeats", "width": "Width", "height": "Height", "requestAV": "Request AV stream", "overlayName": "Camera name on image", "overlayTime": "Date/time on image", "overlayDiag": "Diagnostics on image", "enabled": "Enabled", "save": "Save",
 		"wizardTitle": "New camera setup", "wizardMeta": "This wizard is fully local and keeps working when your computer is connected to a camera AP without internet.",
 		"wizardStep1": "1. Prepare", "wizardStep1Text": "Connect this computer to the camera AP or to the same LAN as the camera. Keep this page open from the local server.",
 		"wizardStep2": "2. Write Wi-Fi and save", "wizardStep2Text": "The server reaches the camera at its current address, sends Wi-Fi settings, then stores the final LAN address locally.",
@@ -1195,6 +1214,9 @@ func (a *App) provisionCamera(body map[string]any, r *http.Request) (map[string]
 		"ackRepeats":   inputInt(body, "ackRepeats", existingAckRepeats(existing)),
 		"enabled":      true,
 		"avStream":     inputBool(body, "avStream", existingAvStream(existing)),
+		"overlayName":  inputBool(body, "overlayName", existingOverlayName(existing)),
+		"overlayTime":  inputBool(body, "overlayTime", existingOverlayTime(existing)),
+		"overlayDiag":  inputBool(body, "overlayDiag", existingOverlayDiag(existing)),
 		"verbose":      inputBool(body, "verbose", existingVerbose(existing)),
 	}
 	setupCamera, err := normalizeCamera(setupInput, existing)
@@ -1324,6 +1346,27 @@ func existingAvStream(c *CameraConfig) bool {
 	return c.avStream()
 }
 
+func existingOverlayName(c *CameraConfig) bool {
+	if c == nil {
+		return false
+	}
+	return c.OverlayName
+}
+
+func existingOverlayTime(c *CameraConfig) bool {
+	if c == nil {
+		return false
+	}
+	return c.OverlayTime
+}
+
+func existingOverlayDiag(c *CameraConfig) bool {
+	if c == nil {
+		return false
+	}
+	return c.OverlayDiag
+}
+
 func existingVerbose(c *CameraConfig) bool {
 	if c == nil {
 		return false
@@ -1347,6 +1390,9 @@ func publicConfig(cam CameraConfig) map[string]any {
 		"enabled":      cam.enabled(),
 		"verbose":      cam.Verbose,
 		"avStream":     cam.avStream(),
+		"overlayName":  cam.OverlayName,
+		"overlayTime":  cam.OverlayTime,
+		"overlayDiag":  cam.OverlayDiag,
 		"ackRepeats":   cam.ackRepeats(),
 	}
 }
@@ -1474,6 +1520,7 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       <dl class="stats">
         <div><dt>%s</dt><dd data-field="%s:videoFrames">%s</dd></div>
         <div><dt>FPS</dt><dd data-field="%s:videoFps">%s</dd></div>
+        <div><dt>%s</dt><dd data-field="%s:streamResolution">%s</dd></div>
         <div><dt>%s</dt><dd data-field="%s:videoKbps">%s</dd></div>
         <div><dt>%s</dt><dd data-field="%s:audioFrames">%s</dd></div>
         <div><dt>%s</dt><dd data-field="%s:healthLabel">%s</dd></div>
@@ -1513,6 +1560,8 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
 			htmlValue(t("video")),
 			htmlValue(id), htmlValue(c["videoFrames"]),
 			htmlValue(id), htmlValue(c["videoFps"]),
+			htmlValue(t("resolution")),
+			htmlValue(id), htmlValue(c["streamResolution"]),
 			htmlValue(t("videoKbps")),
 			htmlValue(id), htmlValue(c["videoKbps"]),
 			htmlValue(t("audio")),
@@ -1918,6 +1967,7 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
           const fields = {
             videoFrames: cam.videoFrames,
             videoFps: cam.videoFps,
+            streamResolution: cam.streamResolution,
             videoKbps: cam.videoKbps,
             audioFrames: cam.audioFrames,
             healthLabel: cam.healthLabel,
@@ -1986,6 +2036,9 @@ func renderCameraConfigForm(camera map[string]any, lang string) string {
       ` + renderInput("width", t("width"), camera["width"], `type="number" min="1"`) + `
       ` + renderInput("height", t("height"), camera["height"], `type="number" min="1"`) + `
       <label class="check"><input name="avStream" type="checkbox" ` + mapBool(asBoolValue(camera["avStream"], true), "checked", "") + `><span>` + htmlValue(t("requestAV")) + `</span></label>
+      <label class="check"><input name="overlayName" type="checkbox" ` + mapBool(asBoolValue(camera["overlayName"], false), "checked", "") + `><span>` + htmlValue(t("overlayName")) + `</span></label>
+      <label class="check"><input name="overlayTime" type="checkbox" ` + mapBool(asBoolValue(camera["overlayTime"], false), "checked", "") + `><span>` + htmlValue(t("overlayTime")) + `</span></label>
+      <label class="check"><input name="overlayDiag" type="checkbox" ` + mapBool(asBoolValue(camera["overlayDiag"], false), "checked", "") + `><span>` + htmlValue(t("overlayDiag")) + `</span></label>
       <label class="check"><input name="enabled" type="checkbox" ` + mapBool(asBoolValue(camera["enabled"], true), "checked", "") + `><span>` + htmlValue(t("enabled")) + `</span></label>
       <button type="submit">` + htmlValue(t("save")) + `</button>
       <output></output>
@@ -2002,6 +2055,14 @@ func renderDeviceConfigForm(id, lang string) string {
 		{"quality640", t("presetQuality640")},
 		{"stop", t("presetStop")},
 		{"custom", t("presetCustom")},
+	}) + `
+      ` + renderSelect("imagePreset", t("imagePreset"), [][2]string{
+		{"auto", t("imageAuto")},
+		{"balanced", t("imageBalanced")},
+		{"dark", t("imageDark")},
+		{"glare", t("imageGlare")},
+		{"reset", t("imageReset")},
+		{"none", leave},
 	}) + `
       <label class="check"><input name="disablePushUpload" type="checkbox" checked><span>` + htmlValue(t("localOnlyMode")) + `</span></label>
       <label class="check"><input name="enableAudioNow" type="checkbox"><span>` + htmlValue(t("enableAudioNow")) + `</span></label>
@@ -2154,6 +2215,8 @@ func (rt *CameraRuntime) UpdateConfig(cfg CameraConfig) {
 	rt.videoMetric = nil
 	rt.audioMetric = nil
 	rt.lastFrameBytes = 0
+	rt.frameWidth = 0
+	rt.frameHeight = 0
 	rt.streamMode = "idle"
 	rt.lastCommand = ""
 	rt.lastCommandAt = time.Time{}
@@ -2199,18 +2262,47 @@ func (rt *CameraRuntime) Start() {
 	}
 	pp.OnVideo = func(frame []byte, _ uint16) {
 		now := time.Now()
+		width, height, _ := jpegFrameSize(frame)
 		rt.mu.Lock()
-		rt.latestFrame = append(rt.latestFrame[:0], frame...)
+		cfg := rt.cfg
+		rt.videoMetric = appendMetric(trimMetric(rt.videoMetric, now), now, len(frame))
+		metric := calcMetric(rt.videoMetric)
+		streamMode := rt.streamMode
+		rt.mu.Unlock()
+
+		outFrame := frame
+		if cfg.OverlayName || cfg.OverlayTime || cfg.OverlayDiag {
+			if rendered, err := renderFrameOverlay(frame, frameOverlay{
+				name:       cfg.name(),
+				showName:   cfg.OverlayName,
+				showTime:   cfg.OverlayTime,
+				showDiag:   cfg.OverlayDiag,
+				at:         now,
+				width:      width,
+				height:     height,
+				fps:        metric.Rate,
+				kbps:       metric.Kbps,
+				streamMode: streamMode,
+			}); err == nil {
+				outFrame = rendered
+			} else {
+				log.Printf("camera %s overlay failed: %s", cfg.ID, err)
+			}
+		}
+
+		rt.mu.Lock()
+		rt.latestFrame = append(rt.latestFrame[:0], outFrame...)
 		rt.lastVideoAt = now
 		rt.lastTraffic = now
 		rt.lastFrameBytes = len(frame)
+		rt.frameWidth = width
+		rt.frameHeight = height
 		rt.lastError = ""
 		atomic.AddUint64(&rt.videoFrames, 1)
-		rt.videoMetric = appendMetric(rt.videoMetric, now, len(frame))
 		clients := keys(rt.videoClients)
 		rt.mu.Unlock()
 		for _, c := range clients {
-			sendDropOld(c.ch, frame)
+			sendDropOld(c.ch, outFrame)
 		}
 	}
 	pp.OnAudio = func(pcm []byte, _ uint16) {
@@ -2590,6 +2682,127 @@ func (rt *CameraRuntime) RefreshDeviceConfig() map[string]any {
 	return out
 }
 
+type imageAnalysis struct {
+	Mean     float64        `json:"mean"`
+	StdDev   float64        `json:"stdDev"`
+	Width    int            `json:"width"`
+	Height   int            `json:"height"`
+	Samples  int            `json:"samples"`
+	Selected string         `json:"selected"`
+	Controls map[string]any `json:"controls"`
+	Error    string         `json:"error,omitempty"`
+}
+
+func (rt *CameraRuntime) imagePresetControls(preset string) (map[string]any, map[string]any, error) {
+	controls := func(name string, values map[string]any) (map[string]any, map[string]any, error) {
+		return values, map[string]any{"selected": name, "controls": values}, nil
+	}
+	switch preset {
+	case "", "none":
+		return nil, nil, nil
+	case "balanced":
+		return controls("balanced", map[string]any{"bright": 4, "contrast": 2, "anti_flicker": 1})
+	case "dark":
+		return controls("dark", map[string]any{"bright": 5, "contrast": 2, "lamp": 1, "anti_flicker": 1})
+	case "glare":
+		return controls("glare", map[string]any{"bright": 3, "contrast": 3, "lamp": 0, "anti_flicker": 1})
+	case "reset":
+		return controls("reset", map[string]any{"resetrb": 1})
+	case "auto":
+		analysis, err := rt.analyzeLatestFrame()
+		if err != nil {
+			values := map[string]any{"bright": 4, "contrast": 2, "anti_flicker": 1}
+			return values, map[string]any{"selected": "balanced", "controls": values, "error": err.Error()}, nil
+		}
+		selected := "balanced"
+		values := map[string]any{"bright": 4, "contrast": 2, "anti_flicker": 1}
+		if analysis.Mean < 70 {
+			selected = "dark"
+			values = map[string]any{"bright": 5, "contrast": 2, "lamp": 1, "anti_flicker": 1}
+		} else if analysis.Mean > 175 {
+			selected = "glare"
+			values = map[string]any{"bright": 3, "contrast": 3, "lamp": 0, "anti_flicker": 1}
+		} else if analysis.StdDev < 28 {
+			selected = "balanced"
+			values = map[string]any{"bright": 4, "contrast": 3, "anti_flicker": 1}
+		}
+		analysis.Selected = selected
+		analysis.Controls = values
+		return values, imageAnalysisData(analysis), nil
+	default:
+		return nil, nil, httpErr(http.StatusBadRequest, "imagePreset must be auto, balanced, dark, glare, reset or none")
+	}
+}
+
+func (rt *CameraRuntime) analyzeLatestFrame() (imageAnalysis, error) {
+	rt.mu.RLock()
+	frame := append([]byte(nil), rt.latestFrame...)
+	rt.mu.RUnlock()
+	if len(frame) == 0 {
+		return imageAnalysis{}, errors.New("no frame to analyze")
+	}
+	img, err := jpeg.Decode(bytes.NewReader(frame))
+	if err != nil {
+		return imageAnalysis{}, err
+	}
+	b := img.Bounds()
+	width, height := b.Dx(), b.Dy()
+	if width <= 0 || height <= 0 {
+		return imageAnalysis{}, errors.New("empty frame")
+	}
+	stepX := maxInt(1, width/160)
+	stepY := maxInt(1, height/120)
+	var sum, sumSq float64
+	samples := 0
+	for y := b.Min.Y; y < b.Max.Y; y += stepY {
+		for x := b.Min.X; x < b.Max.X; x += stepX {
+			r, g, bl, _ := img.At(x, y).RGBA()
+			luma := (0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(bl)) / 257.0
+			sum += luma
+			sumSq += luma * luma
+			samples++
+		}
+	}
+	if samples == 0 {
+		return imageAnalysis{}, errors.New("no samples")
+	}
+	mean := sum / float64(samples)
+	variance := sumSq/float64(samples) - mean*mean
+	if variance < 0 {
+		variance = 0
+	}
+	return imageAnalysis{
+		Mean:    round1(mean),
+		StdDev:  round1(math.Sqrt(variance)),
+		Width:   width,
+		Height:  height,
+		Samples: samples,
+	}, nil
+}
+
+func imageAnalysisData(a imageAnalysis) map[string]any {
+	out := map[string]any{
+		"mean":     a.Mean,
+		"stdDev":   a.StdDev,
+		"width":    a.Width,
+		"height":   a.Height,
+		"samples":  a.Samples,
+		"selected": a.Selected,
+		"controls": a.Controls,
+	}
+	if a.Error != "" {
+		out["error"] = a.Error
+	}
+	return out
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func (rt *CameraRuntime) ApplyDeviceConfig(input map[string]any) (map[string]any, error) {
 	out := map[string]any{"ok": true}
 	var commands []map[string]any
@@ -2649,6 +2862,18 @@ func (rt *CameraRuntime) ApplyDeviceConfig(input map[string]any) (map[string]any
 	}
 
 	devControl := map[string]any{}
+	if imagePreset := inputString(input, "imagePreset", ""); imagePreset != "" {
+		controls, data, err := rt.imagePresetControls(imagePreset)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > 0 {
+			add("image_preset", CommandResult{OK: true, Data: data})
+		}
+		for key, value := range controls {
+			devControl[key] = value
+		}
+	}
 	if presetBitrate > 0 {
 		devControl["rate_bit"] = presetBitrate
 	}
@@ -2800,6 +3025,9 @@ func (rt *CameraRuntime) Status(base string) map[string]any {
 		"audioPacketsPerSecond": audioMetric.Rate,
 		"videoKbps":             videoMetric.Kbps,
 		"videoMode":             rt.cfg.videoMode(),
+		"frameWidth":            rt.frameWidth,
+		"frameHeight":           rt.frameHeight,
+		"streamResolution":      resolutionLabel(rt.frameWidth, rt.frameHeight),
 		"audioKbps":             audioMetric.Kbps,
 		"videoDemand":           videoDemand,
 		"audioDemand":           audioDemand,
@@ -2966,6 +3194,91 @@ func writeMJPEGFrame(w io.Writer, frame []byte) error {
 		return err
 	}
 	return nil
+}
+
+type frameOverlay struct {
+	name       string
+	showName   bool
+	showTime   bool
+	showDiag   bool
+	at         time.Time
+	width      int
+	height     int
+	fps        float64
+	kbps       float64
+	streamMode string
+}
+
+func jpegFrameSize(frame []byte) (int, int, bool) {
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(frame))
+	if err != nil {
+		return 0, 0, false
+	}
+	return cfg.Width, cfg.Height, true
+}
+
+func resolutionLabel(width, height int) string {
+	if width <= 0 || height <= 0 {
+		return "unknown"
+	}
+	return fmt.Sprintf("%dx%d", width, height)
+}
+
+func renderFrameOverlay(frame []byte, opts frameOverlay) ([]byte, error) {
+	var lines []string
+	if opts.showName && strings.TrimSpace(opts.name) != "" {
+		lines = append(lines, opts.name)
+	}
+	if opts.showTime {
+		lines = append(lines, opts.at.Format("2006-01-02 15:04:05"))
+	}
+	if opts.showDiag {
+		lines = append(lines, fmt.Sprintf("%s %.1f fps %.0f kbps %s", resolutionLabel(opts.width, opts.height), opts.fps, opts.kbps, opts.streamMode))
+	}
+	if len(lines) == 0 {
+		return frame, nil
+	}
+
+	src, err := jpeg.Decode(bytes.NewReader(frame))
+	if err != nil {
+		return nil, err
+	}
+	bounds := src.Bounds()
+	rgba := image.NewRGBA(bounds)
+	draw.Draw(rgba, bounds, src, bounds.Min, draw.Src)
+	drawTextBlock(rgba, lines, bounds.Min.X+8, bounds.Min.Y+8)
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, rgba, &jpeg.Options{Quality: 85}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func drawTextBlock(dst draw.Image, lines []string, x, y int) {
+	face := basicfont.Face7x13
+	ascent := face.Metrics().Ascent.Ceil()
+	lineHeight := face.Metrics().Height.Ceil() + 3
+	maxWidth := 0
+	for _, line := range lines {
+		if w := font.MeasureString(face, line).Ceil(); w > maxWidth {
+			maxWidth = w
+		}
+	}
+	if maxWidth <= 0 {
+		return
+	}
+	bg := image.Rect(x-4, y-4, x+maxWidth+8, y+lineHeight*len(lines)+4)
+	draw.Draw(dst, bg, image.NewUniform(color.NRGBA{R: 0, G: 0, B: 0, A: 170}), image.Point{}, draw.Over)
+	shadow := image.NewUniform(color.NRGBA{R: 0, G: 0, B: 0, A: 220})
+	white := image.NewUniform(color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	for i, line := range lines {
+		baseline := y + ascent + i*lineHeight
+		shadowText := font.Drawer{Dst: dst, Src: shadow, Face: face, Dot: fixed.P(x+1, baseline+1)}
+		shadowText.DrawString(line)
+		whiteText := font.Drawer{Dst: dst, Src: white, Face: face, Dot: fixed.P(x, baseline)}
+		whiteText.DrawString(line)
+	}
 }
 
 func (rt *CameraRuntime) ServeAudio(w http.ResponseWriter, r *http.Request, wav bool) {
