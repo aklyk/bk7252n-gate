@@ -768,19 +768,19 @@ var uiText = map[string]map[string]string{
 		"dashboard": "Камеры", "setup": "Настройка", "status": "Статус", "setupNew": "Добавить камеру",
 		"overviewMeta": "На главной легкие превью; живой поток и звук открываются в карточке камеры.",
 		"openLive":     "Открыть live", "sound": "Звук", "stop": "Стоп", "reconnectVideo": "Переподключить видео", "snapshot": "Снимок", "rawMJPEG": "MJPEG напрямую", "rawWAV": "WAV напрямую",
-		"video": "Видео", "fps": "FPS", "videoKbps": "Видео kbps", "audio": "Аудио", "clients": "Клиенты", "restarts": "Рестарты", "mode": "Режим", "peer": "Peer", "resolution": "Разрешение",
+		"video": "Видео", "fps": "FPS", "videoKbps": "Видео bitrate", "audio": "Аудио", "clients": "Клиенты", "restarts": "Рестарты", "mode": "Режим", "peer": "Peer", "resolution": "Разрешение",
 		"localSettings": "Локальный профиль", "cameraSettings": "Настройки камеры", "maintenance": "Обслуживание",
 		"reconnectSession": "Переподключить сессию", "refreshInfo": "Прочитать параметры", "rebootHardware": "Перезагрузить камеру", "rebootConfirm": "Перезагрузить железо камеры?",
 		"wifiSSID": "Wi-Fi SSID", "wifiPassword": "Пароль Wi-Fi", "reboot": "Перезагрузка", "setWifi": "Записать Wi-Fi",
 		"saved": "Сохранено", "sent": "Отправлено", "writing": "Запись...", "read": "Прочитано", "apply": "Применить", "readFromCamera": "Прочитать из камеры",
 		"autoRead": "Считываю настройки...", "autoReadOk": "Настройки считаны", "autoReadTimeout": "Камера не ответила на чтение",
-		"cameraPreset": "Пресет", "presetStable320": "Стабильный 320x240", "presetQuality640": "Качество 640x480", "presetStop": "Остановить видео", "presetCustom": "Не менять автоматически",
+		"cameraPreset": "Пресет", "presetStable320": "Стабильный 320x240 (~600 kbps)", "presetQuality640": "Качество 640x480 (~1.3 Mbps)", "presetStop": "Остановить видео", "presetCustom": "Не менять автоматически",
 		"imagePreset": "Картинка", "imageAuto": "Авто по текущему кадру", "imageBalanced": "Обычная", "imageDark": "Темная сцена", "imageGlare": "Меньше пересвета", "imageReset": "Сбросить картинку",
 		"basicDeviceHelp": "Для обычной работы выберите пресет и нужные галочки. Этого достаточно для Safari, dashboard и Frigate.",
 		"localOnlyMode":   "Локальный режим: отключить push фото/видео", "localOnlyHint": "Отключает отправку фото/видео в push-сервис камеры. WAN все равно лучше резать на роутере.",
 		"enableAudioNow": "Запустить звук сейчас", "disableDetectors": "Отключить детекцию движения и звука", "advancedSettings": "Расширенные параметры", "expertSettings": "Экспертные параметры", "rawReadback": "Сырой ответ прошивки",
-		"leave": "Не менять", "streamProfile": "Поток", "streamStop": "Остановить видео", "streamQVGA": "320x240, легче для Wi-Fi", "streamVGA": "640x480, больше нагрузка",
-		"audioStream": "Аудиопоток", "audioOn": "Включить", "audioOff": "Выключить", "bitrate": "Битрейт", "brightness": "Яркость", "contrast": "Контраст",
+		"leave": "Не менять", "streamProfile": "Поток", "streamStop": "Остановить видео", "streamQVGA": "320x240 (~600 kbps), легче для Wi-Fi", "streamVGA": "640x480 (~1.3 Mbps), больше нагрузка",
+		"audioStream": "Аудиопоток", "audioOn": "Включить", "audioOff": "Выключить", "bitrate": "Целевой битрейт", "brightness": "Яркость", "contrast": "Контраст",
 		"irCut": "IR-cut", "lamp": "Подсветка", "antiFlicker": "Anti-flicker", "rotateMirror": "Поворот/зеркало",
 		"motionDetect": "Детекция движения", "motionDelay": "Задержка движения, с", "audioDetect": "Детекция звука", "audioDelay": "Задержка звука, с",
 		"sleepTime": "Sleep time, с", "offlineTime": "Offline time, с", "limitPush": "Лимит push", "environment": "Окружение/язык", "experimental": "Экспериментально",
@@ -802,19 +802,19 @@ var uiText = map[string]map[string]string{
 		"dashboard": "Dashboard", "setup": "Setup", "status": "Status", "setupNew": "Set up new camera",
 		"overviewMeta": "Snapshot previews keep the overview light; open a camera for live video and sound.",
 		"openLive":     "Open live", "sound": "Sound", "stop": "Stop", "reconnectVideo": "Reconnect video", "snapshot": "Snapshot", "rawMJPEG": "Raw MJPEG", "rawWAV": "Raw WAV",
-		"video": "Video", "fps": "FPS", "videoKbps": "Video kbps", "audio": "Audio", "clients": "Clients", "restarts": "Restarts", "mode": "Mode", "peer": "Peer", "resolution": "Resolution",
+		"video": "Video", "fps": "FPS", "videoKbps": "Video bitrate", "audio": "Audio", "clients": "Clients", "restarts": "Restarts", "mode": "Mode", "peer": "Peer", "resolution": "Resolution",
 		"localSettings": "Local profile", "cameraSettings": "Camera settings", "maintenance": "Maintenance",
 		"reconnectSession": "Reconnect camera session", "refreshInfo": "Refresh camera info", "rebootHardware": "Restart camera hardware", "rebootConfirm": "Restart camera hardware?",
 		"wifiSSID": "Wi-Fi SSID", "wifiPassword": "Wi-Fi password", "reboot": "Reboot", "setWifi": "Set Wi-Fi",
 		"saved": "Saved", "sent": "Sent", "writing": "Writing...", "read": "Read", "apply": "Apply", "readFromCamera": "Read from camera",
 		"autoRead": "Reading settings...", "autoReadOk": "Settings read", "autoReadTimeout": "Camera did not answer readback",
-		"cameraPreset": "Preset", "presetStable320": "Stable 320x240", "presetQuality640": "Quality 640x480", "presetStop": "Stop video", "presetCustom": "Do not auto-change",
+		"cameraPreset": "Preset", "presetStable320": "Stable 320x240 (~600 kbps)", "presetQuality640": "Quality 640x480 (~1.3 Mbps)", "presetStop": "Stop video", "presetCustom": "Do not auto-change",
 		"imagePreset": "Image", "imageAuto": "Auto from current frame", "imageBalanced": "Balanced", "imageDark": "Dark scene", "imageGlare": "Less glare", "imageReset": "Reset image",
 		"basicDeviceHelp": "For normal use, choose a preset and the needed checkboxes. This is enough for Safari, dashboard and Frigate.",
 		"localOnlyMode":   "Local mode: disable push photos/videos", "localOnlyHint": "Disables photo/video upload to the camera push service. Router WAN blocking is still recommended.",
 		"enableAudioNow": "Start audio now", "disableDetectors": "Disable motion and sound detection", "advancedSettings": "Advanced settings", "expertSettings": "Expert settings", "rawReadback": "Raw firmware response",
-		"leave": "Leave unchanged", "streamProfile": "Stream", "streamStop": "Stop video", "streamQVGA": "320x240, lighter on Wi-Fi", "streamVGA": "640x480, higher load",
-		"audioStream": "Audio stream", "audioOn": "On", "audioOff": "Off", "bitrate": "Bitrate", "brightness": "Brightness", "contrast": "Contrast",
+		"leave": "Leave unchanged", "streamProfile": "Stream", "streamStop": "Stop video", "streamQVGA": "320x240 (~600 kbps), lighter on Wi-Fi", "streamVGA": "640x480 (~1.3 Mbps), higher load",
+		"audioStream": "Audio stream", "audioOn": "On", "audioOff": "Off", "bitrate": "Target bitrate", "brightness": "Brightness", "contrast": "Contrast",
 		"irCut": "IR-cut", "lamp": "Light", "antiFlicker": "Anti-flicker", "rotateMirror": "Rotate/mirror",
 		"motionDetect": "Motion detect", "motionDelay": "Motion delay, s", "audioDetect": "Audio detect", "audioDelay": "Audio delay, s",
 		"sleepTime": "Sleep time, s", "offlineTime": "Offline time, s", "limitPush": "Push limit", "environment": "Environment/language", "experimental": "Experimental",
@@ -1556,6 +1556,37 @@ func htmlValue(v any) string {
 	return html.EscapeString(s)
 }
 
+func formatBitrateValue(v any) string {
+	var kbps float64
+	switch x := v.(type) {
+	case float64:
+		kbps = x
+	case float32:
+		kbps = float64(x)
+	case int:
+		kbps = float64(x)
+	case int64:
+		kbps = float64(x)
+	case uint64:
+		kbps = float64(x)
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		if err != nil {
+			return x
+		}
+		kbps = parsed
+	default:
+		return fmt.Sprint(v)
+	}
+	if kbps <= 0 {
+		return "0 kbps"
+	}
+	if kbps >= 1000 {
+		return fmt.Sprintf("%.1f Mbps", kbps/1000)
+	}
+	return fmt.Sprintf("%.0f kbps", kbps)
+}
+
 func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) string {
 	lang := requestLang(r)
 	t := func(key string) string { return tr(lang, key) }
@@ -1667,7 +1698,7 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
 			htmlValue(t("resolution")),
 			htmlValue(id), htmlValue(c["streamResolution"]),
 			htmlValue(t("videoKbps")),
-			htmlValue(id), htmlValue(c["videoKbps"]),
+			htmlValue(id), htmlValue(formatBitrateValue(c["videoKbps"])),
 			htmlValue(t("audio")),
 			htmlValue(id), htmlValue(c["audioFrames"]),
 			htmlValue(t("status")),
@@ -1813,6 +1844,13 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       for (const img of document.querySelectorAll('img[data-live]')) reconnectLive(img.dataset.live, false)
     }
 
+    function formatBitrate(kbps) {
+      const value = Number(kbps)
+      if (!Number.isFinite(value) || value <= 0) return '0 kbps'
+      if (value >= 1000) return (value / 1000).toFixed(1) + ' Mbps'
+      return Math.round(value) + ' kbps'
+    }
+
     function joinBytes(a, b) {
       if (!a || a.length === 0) return b
       const out = new Uint8Array(a.length + b.length)
@@ -1947,6 +1985,23 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       else el.value = String(value)
     }
 
+    function rateBitToKbps(rateBit) {
+      const value = Number(rateBit)
+      if (!Number.isFinite(value) || value <= 0) return ''
+      const kbps = value * 50
+      const options = [400, 600, 800, 1000, 1300, 1600, 2000, 2600]
+      let best = options[0]
+      let bestDiff = Math.abs(best - kbps)
+      for (const option of options) {
+        const diff = Math.abs(option - kbps)
+        if (diff < bestDiff) {
+          best = option
+          bestDiff = diff
+        }
+      }
+      return String(best)
+    }
+
     function applyDeviceReadback(form, readback) {
       const parms = commandData(readback, 'get_parms') || {}
       const alarm = commandData(readback, 'get_cyalarm') || {}
@@ -1955,7 +2010,7 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       if (parms.stream === 2) setFormValue(form, 'preset', 'stable320')
       else if (parms.stream === 1) setFormValue(form, 'preset', 'quality640')
 
-      setFormValue(form, 'bitrate', parms.rate_bit)
+      setFormValue(form, 'bitrateKbps', rateBitToKbps(parms.rate_bit))
       setFormValue(form, 'brightness', parms.bright)
       setFormValue(form, 'contrast', parms.contrast)
       setFormValue(form, 'irCut', parms.icut)
@@ -2072,7 +2127,7 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
             videoFrames: cam.videoFrames,
             videoFps: cam.videoFps,
             streamResolution: cam.streamResolution,
-            videoKbps: cam.videoKbps,
+            videoKbps: formatBitrate(cam.videoKbps),
             audioFrames: cam.audioFrames,
             healthLabel: cam.healthLabel,
             clients: cam.videoClients + '/' + cam.audioClients,
@@ -2130,6 +2185,21 @@ func renderSelectValue(name, label string, selected any, options [][2]string) st
 	}
 	b.WriteString(`</select></label>`)
 	return b.String()
+}
+
+func renderBitrateSelect(lang string) string {
+	t := func(key string) string { return tr(lang, key) }
+	return renderSelect("bitrateKbps", t("bitrate"), [][2]string{
+		{"", t("leave")},
+		{"400", "400 kbps"},
+		{"600", "600 kbps"},
+		{"800", "800 kbps"},
+		{"1000", "1.0 Mbps"},
+		{"1300", "1.3 Mbps"},
+		{"1600", "1.6 Mbps"},
+		{"2000", "2.0 Mbps"},
+		{"2600", "2.6 Mbps"},
+	})
 }
 
 func renderCameraConfigForm(camera map[string]any, lang string) string {
@@ -2203,7 +2273,7 @@ func renderDeviceConfigForm(id, lang string) string {
 		{"on", t("audioOn")},
 		{"off", t("audioOff")},
 	}) + `
-          ` + renderInput("bitrate", t("bitrate"), "", `type="number" min="1" max="64" placeholder="26"`) + `
+          ` + renderBitrateSelect(lang) + `
           ` + renderInput("brightness", t("brightness"), "", `type="number" min="0" max="6" placeholder="4"`) + `
           ` + renderInput("contrast", t("contrast"), "", `type="number" min="0" max="6" placeholder="2"`) + `
           ` + renderSelect("irCut", t("irCut"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}}) + `
@@ -2903,6 +2973,20 @@ func maxInt(a, b int) int {
 	return b
 }
 
+func bitrateKbpsToRateBit(kbps int) int {
+	if kbps < 50 {
+		return 1
+	}
+	value := int(math.Round(float64(kbps) / 50.0))
+	if value < 1 {
+		return 1
+	}
+	if value > 64 {
+		return 64
+	}
+	return value
+}
+
 func (rt *CameraRuntime) ApplyDeviceConfig(input map[string]any) (map[string]any, error) {
 	out := map[string]any{"ok": true}
 	var commands []map[string]any
@@ -2976,6 +3060,11 @@ func (rt *CameraRuntime) ApplyDeviceConfig(input map[string]any) (map[string]any
 	}
 	if presetBitrate > 0 {
 		devControl["rate_bit"] = presetBitrate
+	}
+	if value, ok, err := optionalInt(input, "bitrateKbps", 50, 3200); err != nil {
+		return nil, err
+	} else if ok {
+		devControl["rate_bit"] = bitrateKbpsToRateBit(value)
 	}
 	if value, ok, err := optionalInt(input, "bitrate", 1, 64); err != nil {
 		return nil, err
