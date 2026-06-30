@@ -7,7 +7,8 @@ const PPPP = require('../PPPP/pppp')
 
 const ROOT = __dirname
 const CONFIG_PATH = process.env.BKCAM_CONFIG || path.join(ROOT, 'config.json')
-const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
+const EXAMPLE_CONFIG_PATH = path.join(ROOT, 'config.example.json')
+let config = loadConfig()
 const serverConfig = config.server || {}
 const PUBLIC_HOST = serverConfig.host || '127.0.0.1'
 const PORT = Number(process.env.PORT || serverConfig.port || 8088)
@@ -18,6 +19,22 @@ const AUDIO_CHANNELS = 1
 const AUDIO_BYTES_PER_SAMPLE = 2
 const AUDIO_SILENCE_CHUNK = Buffer.alloc(AUDIO_SAMPLE_RATE * AUDIO_CHANNELS * AUDIO_BYTES_PER_SAMPLE)
 const EMPTY_CLIENT_TTL_MS = 15000
+const METRIC_WINDOW_MS = 5000
+
+function loadConfig() {
+  const fallback = { server: { host: '127.0.0.1', port: 8088, bind: '0.0.0.0' }, cameras: [] }
+  const source = fs.existsSync(CONFIG_PATH)
+    ? CONFIG_PATH
+    : (fs.existsSync(EXAMPLE_CONFIG_PATH) ? EXAMPLE_CONFIG_PATH : null)
+  if (!source) return fallback
+  return { ...fallback, ...JSON.parse(fs.readFileSync(source, 'utf8')) }
+}
+
+function saveConfig() {
+  const tmp = `${CONFIG_PATH}.${process.pid}.tmp`
+  fs.writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`)
+  fs.renameSync(tmp, CONFIG_PATH)
+}
 
 function nowIso() {
   return new Date().toISOString()
@@ -51,6 +68,93 @@ function writeText(res, status, text, type = 'text/plain; charset=utf-8') {
     'content-length': body.length,
   })
   res.end(body)
+}
+
+function readJsonBody(req, maxBytes = 128 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let total = 0
+    req.on('data', (chunk) => {
+      total += chunk.length
+      if (total > maxBytes) {
+        reject(Object.assign(new Error('request body too large'), { statusCode: 413 }))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      if (!chunks.length) {
+        resolve({})
+        return
+      }
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+      } catch (err) {
+        reject(Object.assign(new Error('invalid JSON body'), { statusCode: 400 }))
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
+function asString(value, fallback = '') {
+  if (value === undefined || value === null) return fallback
+  return String(value).trim()
+}
+
+function asBool(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return fallback
+  if (typeof value === 'boolean') return value
+  return ['1', 'true', 'yes', 'on', 'enabled'].includes(String(value).toLowerCase())
+}
+
+function asInt(value, fallback) {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.round(n) : fallback
+}
+
+function normalizeCamera(input, existing = null) {
+  const camera = existing ? { ...existing } : {}
+  const id = asString(input.id, camera.id)
+  if (!id) throw Object.assign(new Error('camera id is required'), { statusCode: 400 })
+  if (!CAMERA_ID_RE.test(id)) throw Object.assign(new Error(`camera id must match ${CAMERA_ID_RE}`), { statusCode: 400 })
+  camera.id = id
+  camera.name = asString(input.name, camera.name || id)
+  camera.ip = asString(input.ip, camera.ip)
+  camera.discovery = asString(input.discovery, camera.discovery || camera.ip || '255.255.255.255')
+  camera.localAddress = asString(input.localAddress, camera.localAddress)
+  camera.psk = asString(input.psk, camera.psk || 'SHIX')
+  camera.username = asString(input.username, camera.username || 'admin')
+  if (input.password !== undefined && input.password !== '') camera.password = String(input.password)
+  else camera.password = camera.password || '6666'
+  camera.width = asInt(input.width, camera.width || 640)
+  camera.height = asInt(input.height, camera.height || 480)
+  camera.enabled = asBool(input.enabled, camera.enabled !== false)
+  camera.verbose = asBool(input.verbose, Boolean(camera.verbose))
+  camera.ackRepeats = Math.min(9, Math.max(1, asInt(input.ackRepeats, camera.ackRepeats || 2)))
+  if (!camera.ip && !camera.discovery) {
+    throw Object.assign(new Error('camera ip or discovery address is required'), { statusCode: 400 })
+  }
+  return camera
+}
+
+function publicCameraConfig(camera) {
+  return {
+    id: camera.id,
+    name: camera.name || camera.id,
+    ip: camera.ip || '',
+    discovery: camera.discovery || '',
+    localAddress: camera.localAddress || '',
+    psk: camera.psk || 'SHIX',
+    username: camera.username || 'admin',
+    hasPassword: Boolean(camera.password),
+    width: camera.width || 640,
+    height: camera.height || 480,
+    enabled: camera.enabled !== false,
+    verbose: Boolean(camera.verbose),
+    ackRepeats: camera.ackRepeats || 2,
+  }
 }
 
 function writeWavHeader(res) {
@@ -90,6 +194,11 @@ class CameraRuntime {
     this.lastCommand = null
     this.monitor = null
     this.streamMaintainer = null
+    this.videoMetric = []
+    this.audioMetric = []
+    this.lastFrameBytes = 0
+    this.streamMode = 'idle'
+    this.lastSnapshotDemandAt = null
   }
 
   start() {
@@ -103,6 +212,7 @@ class CameraRuntime {
       psk: this.camera.psk || 'SHIX',
       username: this.camera.username || 'admin',
       password: this.camera.password || '6666',
+      ackRepeats: this.camera.ackRepeats || 2,
       verbose: Boolean(this.camera.verbose),
     })
 
@@ -118,12 +228,15 @@ class CameraRuntime {
       this.latestFrame = frame
       this.lastVideoAt = Date.now()
       this.videoFrames += 1
+      this.lastFrameBytes = frame.length
+      this.recordMetric(this.videoMetric, frame.length)
       this.broadcastVideoFrame(frame)
     })
 
     this.pppp.on('audioFrame', ({ frame }) => {
       this.lastAudioAt = Date.now()
       this.audioFrames += 1
+      this.recordMetric(this.audioMetric, frame.length)
       this.broadcastAudioFrame(frame)
     })
 
@@ -144,11 +257,11 @@ class CameraRuntime {
     this.streamMaintainer = setInterval(() => this.maintainStreams(), 1000)
   }
 
-  safeCall(method) {
+  safeCall(method, ...args) {
     try {
       if (method.startsWith('sendCMD') && !this.connectedAt) return false
       if (!this.pppp || typeof this.pppp[method] !== 'function') return false
-      this.pppp[method]()
+      this.pppp[method](...args)
       return true
     } catch (err) {
       this.lastError = err.message
@@ -169,7 +282,8 @@ class CameraRuntime {
     this.sweepClients()
     if (!this.pppp || !this.connectedAt) return
     const now = Date.now()
-    const hasVideoDemand = this.videoClients.size > 0 || !this.latestFrame
+    const hasSnapshotDemand = this.lastSnapshotDemandAt && now - this.lastSnapshotDemandAt < 10000
+    const hasVideoDemand = this.videoClients.size > 0 || hasSnapshotDemand || !this.latestFrame
     const hasAudioDemand = this.audioClients.size > 0
     const staleVideo = hasVideoDemand && (!this.lastVideoAt || now - this.lastVideoAt > 5000)
     const staleAudio = hasAudioDemand && (!this.lastAudioAt || now - this.lastAudioAt > 2500)
@@ -187,9 +301,57 @@ class CameraRuntime {
     const wantsVideo = forceVideo || this.videoClients.size > 0 || !this.latestFrame
     const wantsAudio = this.audioClients.size > 0
 
-    if (wantsVideo && wantsAudio && this.safeCall('sendCMDrequestAv')) return
-    if (wantsVideo) this.safeCall('sendCMDrequestVideo1')
-    if (wantsAudio) this.safeCall('sendCMDrequestAudio')
+    if (wantsVideo && wantsAudio && this.safeCall('sendCMDrequestAv')) {
+      this.streamMode = 'audio+video'
+      return
+    }
+    if (wantsVideo && this.safeCall('sendCMDrequestVideo1')) this.streamMode = 'video'
+    if (wantsAudio && this.safeCall('sendCMDrequestAudio')) this.streamMode = wantsVideo ? 'audio+video' : 'audio'
+  }
+
+  recordMetric(bucket, bytes) {
+    const now = Date.now()
+    bucket.push({ at: now, bytes })
+    while (bucket.length && now - bucket[0].at > METRIC_WINDOW_MS) bucket.shift()
+  }
+
+  metric(bucket) {
+    const now = Date.now()
+    while (bucket.length && now - bucket[0].at > METRIC_WINDOW_MS) bucket.shift()
+    if (bucket.length < 2) {
+      return { rate: 0, kbps: 0 }
+    }
+    const durationSec = Math.max(0.001, (bucket[bucket.length - 1].at - bucket[0].at) / 1000)
+    const bytes = bucket.reduce((sum, point) => sum + point.bytes, 0)
+    return {
+      rate: Number((bucket.length / durationSec).toFixed(2)),
+      kbps: Number(((bytes * 8) / durationSec / 1000).toFixed(1)),
+    }
+  }
+
+  updateCamera(camera) {
+    this.stop(true)
+    this.camera = camera
+    this.id = camera.id
+    this.latestFrame = null
+    this.lastVideoAt = null
+    this.lastAudioAt = null
+    this.videoMetric = []
+    this.audioMetric = []
+    this.lastFrameBytes = 0
+    this.streamMode = 'idle'
+    this.lastSnapshotDemandAt = null
+    if (camera.enabled !== false) this.start()
+  }
+
+  command(method, ...args) {
+    const ok = this.safeCall(method, ...args)
+    return ok ? { ok: true } : { ok: false, error: this.connectedAt ? 'command unavailable' : 'camera is not connected' }
+  }
+
+  setWifi(ssid, password) {
+    if (!ssid || !password) return { ok: false, error: 'ssid and password are required' }
+    return this.command('sendCMDsetWifi', ssid, password)
   }
 
   restart(reason) {
@@ -368,6 +530,8 @@ class CameraRuntime {
 
   writeSnapshot(res) {
     this.start()
+    this.lastSnapshotDemandAt = Date.now()
+    this.requestStreams(false)
     if (!this.latestFrame) {
       writeJson(res, 503, { error: 'snapshot not ready', camera: this.id })
       return
@@ -381,6 +545,8 @@ class CameraRuntime {
   }
 
   status(baseUrl) {
+    const videoMetric = this.metric(this.videoMetric)
+    const audioMetric = this.metric(this.audioMetric)
     return {
       id: this.id,
       name: this.camera.name || this.id,
@@ -394,6 +560,12 @@ class CameraRuntime {
       lastAudioAgeMs: this.lastAudioAt ? Date.now() - this.lastAudioAt : null,
       videoFrames: this.videoFrames,
       audioFrames: this.audioFrames,
+      videoFps: videoMetric.rate,
+      audioPacketsPerSecond: audioMetric.rate,
+      videoKbps: videoMetric.kbps,
+      audioKbps: audioMetric.kbps,
+      lastFrameBytes: this.lastFrameBytes,
+      streamMode: this.streamMode,
       videoClients: this.videoClients.size,
       audioClients: this.audioClients.size,
       restartCount: this.restartCount,
@@ -411,13 +583,35 @@ class CameraRuntime {
 }
 
 const runtimes = new Map()
-for (const camera of config.cameras || []) {
-  if (!camera.id) throw new Error('camera.id is required')
-  if (!CAMERA_ID_RE.test(camera.id)) throw new Error(`camera.id must match ${CAMERA_ID_RE}: ${camera.id}`)
-  if (runtimes.has(camera.id)) throw new Error(`duplicate camera.id: ${camera.id}`)
+
+function cameraIndex(id) {
+  return (config.cameras || []).findIndex((camera) => camera.id === id)
+}
+
+function upsertRuntime(camera) {
+  const existing = runtimes.get(camera.id)
+  if (existing) {
+    existing.updateCamera(camera)
+    return existing
+  }
   const runtime = new CameraRuntime(camera)
   runtimes.set(camera.id, runtime)
   if (camera.enabled !== false) runtime.start()
+  return runtime
+}
+
+function removeRuntime(id) {
+  const runtime = runtimes.get(id)
+  if (!runtime) return false
+  runtime.stop(true)
+  runtimes.delete(id)
+  return true
+}
+
+config.cameras = (config.cameras || []).map((camera) => normalizeCamera(camera))
+for (const camera of config.cameras) {
+  if (runtimes.has(camera.id)) throw new Error(`duplicate camera.id: ${camera.id}`)
+  upsertRuntime(camera)
 }
 
 function baseUrl(req) {
@@ -431,11 +625,219 @@ function allStatuses(req) {
   return Array.from(runtimes.values()).map((r) => r.status(base))
 }
 
+function renderInput(name, label, value = '', attrs = '') {
+  return `<label><span>${escapeHtml(label)}</span><input name="${escapeHtml(name)}" value="${escapeHtml(value)}" ${attrs}></label>`
+}
+
+function renderCameraConfigForm(camera) {
+  if (!camera) return ''
+  return `
+    <form data-update-camera="${escapeHtml(camera.id)}" class="config-form">
+      ${renderInput('name', 'Name', camera.name)}
+      ${renderInput('ip', 'Camera IP', camera.ip, 'inputmode="numeric" autocomplete="off"')}
+      ${renderInput('discovery', 'Discovery', camera.discovery, 'inputmode="numeric" autocomplete="off"')}
+      ${renderInput('localAddress', 'Local bind', camera.localAddress, 'inputmode="numeric" autocomplete="off"')}
+      ${renderInput('psk', 'PSK', camera.psk, 'autocomplete="off"')}
+      ${renderInput('username', 'User', camera.username, 'autocomplete="off"')}
+      ${renderInput('password', 'Password', '', 'type="password" placeholder="keep current" autocomplete="new-password"')}
+      ${renderInput('ackRepeats', 'ACK repeats', camera.ackRepeats, 'type="number" min="1" max="9"')}
+      ${renderInput('width', 'Width', camera.width, 'type="number" min="1"')}
+      ${renderInput('height', 'Height', camera.height, 'type="number" min="1"')}
+      <label class="check"><input name="enabled" type="checkbox" ${camera.enabled ? 'checked' : ''}><span>Enabled</span></label>
+      <button type="submit">Save</button>
+      <output></output>
+    </form>`
+}
+
+function renderWizard(cameraOptions) {
+  return `
+    <section class="wizard">
+      <header class="section-head">
+        <div>
+          <h2>Setup wizard</h2>
+          <p class="meta">Works locally while your computer is connected to a camera AP without internet.</p>
+        </div>
+      </header>
+      <div class="steps">
+        <section class="step">
+          <strong>1. Link</strong>
+          <p>For a new camera, connect this computer to the camera AP, then open this page through <code>http://127.0.0.1:8088/</code>. If the camera is already on LAN, stay on LAN.</p>
+        </section>
+        <section class="step">
+          <strong>2. Register</strong>
+          <form data-add-camera class="config-form">
+            <label><span>ID</span><input name="id" required pattern="[A-Za-z0-9_-]+" autocomplete="off" placeholder="a9_front"></label>
+            <label><span>Name</span><input name="name" autocomplete="off" placeholder="Front door"></label>
+            <label><span>Camera IP</span><input name="ip" placeholder="192.168.1.203" inputmode="numeric" autocomplete="off"></label>
+            <label><span>Discovery</span><input name="discovery" placeholder="255.255.255.255" inputmode="numeric" autocomplete="off"></label>
+            <label><span>PSK</span><input name="psk" value="SHIX" autocomplete="off"></label>
+            <label><span>User</span><input name="username" value="admin" autocomplete="off"></label>
+            <label><span>Password</span><input name="password" type="password" value="6666" autocomplete="new-password"></label>
+            <label><span>ACK</span><input name="ackRepeats" type="number" min="1" max="9" value="2"></label>
+            <button type="submit">Add camera</button>
+            <output></output>
+          </form>
+        </section>
+        <section class="step">
+          <strong>3. Set Wi-Fi</strong>
+          <form data-wizard-wifi class="config-form compact">
+            <label><span>Camera</span><select name="id">${cameraOptions}</select></label>
+            <label><span>Target SSID</span><input name="ssid" autocomplete="off"></label>
+            <label><span>Target password</span><input name="password" type="password" autocomplete="new-password"></label>
+            <label class="check"><input name="reboot" type="checkbox" checked><span>Reboot</span></label>
+            <button type="submit">Send Wi-Fi</button>
+            <output></output>
+          </form>
+        </section>
+        <section class="step">
+          <strong>4. Finish</strong>
+          <p>Reconnect this computer to the target Wi-Fi, wait for DHCP, then update the camera IP or discovery address if it changed.</p>
+        </section>
+      </div>
+    </section>`
+}
+
+async function handleApi(req, res, pathname) {
+  const method = req.method || 'GET'
+
+  if (pathname === '/api/status' && method === 'GET') {
+    writeJson(res, 200, {
+      server: { host: PUBLIC_HOST, port: PORT, bind: BIND },
+      cameras: allStatuses(req),
+    })
+    return true
+  }
+
+  if (pathname === '/api/config' && method === 'GET') {
+    writeJson(res, 200, {
+      configPath: CONFIG_PATH,
+      server: { host: PUBLIC_HOST, port: PORT, bind: BIND },
+      cameras: config.cameras.map(publicCameraConfig),
+    })
+    return true
+  }
+
+  if (pathname === '/api/cameras' && method === 'GET') {
+    writeJson(res, 200, {
+      cameras: config.cameras.map((camera) => ({
+        ...publicCameraConfig(camera),
+        status: runtimes.get(camera.id)?.status(baseUrl(req)) || null,
+      })),
+    })
+    return true
+  }
+
+  if (pathname === '/api/cameras' && method === 'POST') {
+    const body = await readJsonBody(req)
+    const camera = normalizeCamera(body)
+    if (cameraIndex(camera.id) !== -1) {
+      writeJson(res, 409, { error: 'camera already exists', id: camera.id })
+      return true
+    }
+    config.cameras.push(camera)
+    saveConfig()
+    const runtime = upsertRuntime(camera)
+    writeJson(res, 201, {
+      camera: publicCameraConfig(camera),
+      status: runtime.status(baseUrl(req)),
+    })
+    return true
+  }
+
+  const match = pathname.match(/^\/api\/cameras\/([^/]+)(?:\/([^/]+))?$/)
+  if (!match) return false
+
+  const id = decodeURIComponent(match[1])
+  const action = match[2] || ''
+  const idx = cameraIndex(id)
+  const camera = idx === -1 ? null : config.cameras[idx]
+  const runtime = runtimes.get(id)
+
+  if (!camera) {
+    writeJson(res, 404, { error: 'unknown camera', id })
+    return true
+  }
+
+  if (!action && method === 'GET') {
+    writeJson(res, 200, {
+      camera: publicCameraConfig(camera),
+      status: runtime?.status(baseUrl(req)) || null,
+    })
+    return true
+  }
+
+  if (!action && (method === 'PATCH' || method === 'PUT')) {
+    const body = await readJsonBody(req)
+    if (body.id && body.id !== id) {
+      writeJson(res, 400, { error: 'camera id cannot be changed' })
+      return true
+    }
+    const next = normalizeCamera({ ...camera, ...body, id }, camera)
+    config.cameras[idx] = next
+    saveConfig()
+    const nextRuntime = upsertRuntime(next)
+    writeJson(res, 200, {
+      camera: publicCameraConfig(next),
+      status: nextRuntime.status(baseUrl(req)),
+    })
+    return true
+  }
+
+  if (!action && method === 'DELETE') {
+    removeRuntime(id)
+    config.cameras.splice(idx, 1)
+    saveConfig()
+    writeJson(res, 200, { ok: true, id })
+    return true
+  }
+
+  if (method !== 'POST') {
+    writeJson(res, 405, { error: 'method not allowed' })
+    return true
+  }
+
+  const body = await readJsonBody(req)
+  if (action === 'restart') {
+    runtime.restart('manual restart')
+    writeJson(res, 200, { ok: true, id })
+    return true
+  }
+  if (action === 'wifi') {
+    const result = runtime.setWifi(asString(body.ssid), String(body.password || ''))
+    if (result.ok && asBool(body.reboot, false)) setTimeout(() => runtime.safeCall('sendCMDReboot'), 1500)
+    writeJson(res, result.ok ? 200 : 409, result.ok ? { ok: true, id } : result)
+    return true
+  }
+  if (action === 'scan-wifi') {
+    const result = runtime.command('sendCMDscanWifi')
+    writeJson(res, result.ok ? 200 : 409, result.ok ? { ok: true, id } : result)
+    return true
+  }
+  if (action === 'params') {
+    const result = runtime.command('sendCMDgetParams')
+    writeJson(res, result.ok ? 200 : 409, result.ok ? { ok: true, id } : result)
+    return true
+  }
+  if (action === 'reboot') {
+    const result = runtime.command('sendCMDReboot')
+    writeJson(res, result.ok ? 200 : 409, result.ok ? { ok: true, id } : result)
+    return true
+  }
+
+  writeJson(res, 404, { error: 'unknown camera action', id, action })
+  return true
+}
+
 function renderPage(req, cameraId = null) {
   const statuses = allStatuses(req)
   const cameras = cameraId ? statuses.filter((c) => c.id === cameraId) : statuses
+  const configs = new Map(config.cameras.map((camera) => [camera.id, publicCameraConfig(camera)]))
+  const cameraOptions = config.cameras.map((camera) => `
+    <option value="${escapeHtml(camera.id)}">${escapeHtml(camera.name || camera.id)}</option>
+  `).join('')
+  const manager = cameraId ? '' : renderWizard(cameraOptions || '<option value="">No cameras</option>')
   const cards = cameras.map((c) => `
-    <section class="camera" data-camera-id="${escapeHtml(c.id)}">
+    <section class="camera ${cameraId ? 'detail' : 'summary-card'}" data-camera-id="${escapeHtml(c.id)}">
       <header class="camera-head">
         <div>
           <h2>${escapeHtml(c.name)}</h2>
@@ -444,10 +846,17 @@ function renderPage(req, cameraId = null) {
         <span class="state ${c.connected ? 'ok' : 'warn'}">${c.connected ? 'online' : 'connecting'}</span>
       </header>
       <div class="media">
-        <img src="/cam/${encodeURIComponent(c.id)}/video.mjpg" alt="${escapeHtml(c.name)} live video">
+        ${cameraId
+          ? `<img data-live="${escapeHtml(c.id)}" src="/cam/${encodeURIComponent(c.id)}/video.mjpg?ts=${Date.now()}" alt="${escapeHtml(c.name)} live video">`
+          : `<a href="/cam/${encodeURIComponent(c.id)}"><img data-preview="${escapeHtml(c.id)}" src="/cam/${encodeURIComponent(c.id)}/snapshot.jpg?ts=${Date.now()}" alt="${escapeHtml(c.name)} preview"></a>`}
       </div>
       <div class="toolbar">
         <button data-audio="${escapeHtml(c.id)}">Audio</button>
+        <a href="/cam/${encodeURIComponent(c.id)}">Open</a>
+        ${cameraId ? `<button data-live-reconnect="${escapeHtml(c.id)}">Reconnect</button>` : ''}
+        <button data-command="restart" data-id="${escapeHtml(c.id)}">Restart</button>
+        <button data-command="params" data-id="${escapeHtml(c.id)}">Params</button>
+        <button data-command="reboot" data-id="${escapeHtml(c.id)}">Reboot</button>
         <a href="/cam/${encodeURIComponent(c.id)}/snapshot.jpg" target="_blank">Snapshot</a>
         <a href="/cam/${encodeURIComponent(c.id)}/video.mjpg" target="_blank">MJPEG</a>
         <a href="/cam/${encodeURIComponent(c.id)}/audio.wav" target="_blank">WAV</a>
@@ -455,10 +864,24 @@ function renderPage(req, cameraId = null) {
       <audio id="audio-${escapeHtml(c.id)}" controls preload="none" hidden></audio>
       <dl class="stats">
         <div><dt>Video</dt><dd data-field="${escapeHtml(c.id)}:videoFrames">${c.videoFrames}</dd></div>
+        <div><dt>FPS</dt><dd data-field="${escapeHtml(c.id)}:videoFps">${c.videoFps || 0}</dd></div>
+        <div><dt>Video kbps</dt><dd data-field="${escapeHtml(c.id)}:videoKbps">${c.videoKbps || 0}</dd></div>
         <div><dt>Audio</dt><dd data-field="${escapeHtml(c.id)}:audioFrames">${c.audioFrames}</dd></div>
+        <div><dt>Mode</dt><dd data-field="${escapeHtml(c.id)}:streamMode">${escapeHtml(c.streamMode || 'idle')}</dd></div>
         <div><dt>Clients</dt><dd data-field="${escapeHtml(c.id)}:clients">${c.videoClients}/${c.audioClients}</dd></div>
         <div><dt>Restarts</dt><dd data-field="${escapeHtml(c.id)}:restartCount">${c.restartCount}</dd></div>
       </dl>
+      <details>
+        <summary>Camera</summary>
+        ${renderCameraConfigForm(configs.get(c.id))}
+        <form data-wifi-camera="${escapeHtml(c.id)}" class="config-form compact">
+          <label><span>Wi-Fi SSID</span><input name="ssid" autocomplete="off"></label>
+          <label><span>Wi-Fi password</span><input name="password" type="password" autocomplete="new-password"></label>
+          <label class="check"><input name="reboot" type="checkbox" checked><span>Reboot</span></label>
+          <button type="submit">Set Wi-Fi</button>
+          <output></output>
+        </form>
+      </details>
     </section>
   `).join('')
 
@@ -479,7 +902,15 @@ function renderPage(req, cameraId = null) {
     a, button { color: inherit; }
     nav a, .toolbar a, button { border: 1px solid var(--line); background: var(--panel); text-decoration: none; padding: 7px 10px; border-radius: 6px; font: inherit; cursor: pointer; }
     main { width: min(1440px, 100%); margin: 0 auto; padding: 16px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; }
+    code { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
+    .wizard { margin-bottom: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+    .section-head { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    .steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px; }
+    .step { border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-width: 0; }
+    .step strong { display: block; margin-bottom: 6px; }
+    .step p { margin: 0; color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; align-items: start; }
+    .detail-grid { grid-template-columns: minmax(0, 980px); justify-content: center; }
     .camera { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
     .camera-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
     h2 { font-size: 16px; margin: 0 0 2px; font-weight: 650; }
@@ -487,7 +918,9 @@ function renderPage(req, cameraId = null) {
     .state { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
     .state.ok { color: var(--ok); }
     .state.warn { color: var(--warn); }
-    .media { aspect-ratio: 4 / 3; background: #050505; display: grid; place-items: center; }
+    .media { aspect-ratio: 16 / 9; background: #050505; display: grid; place-items: center; }
+    .detail .media { aspect-ratio: 4 / 3; }
+    .media a { display: block; width: 100%; height: 100%; }
     .media img { width: 100%; height: 100%; object-fit: contain; display: block; }
     .toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
     audio:not([hidden]) { display: block; width: calc(100% - 24px); margin: 0 12px 12px; height: 36px; }
@@ -495,7 +928,19 @@ function renderPage(req, cameraId = null) {
     .stats div { min-width: 0; }
     dt { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
     dd { margin: 0; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    @media (max-width: 520px) { main { padding: 10px; } .grid { grid-template-columns: 1fr; } header.top { padding: 0 12px; } nav a { display: none; } .stats { grid-template-columns: repeat(2, 1fr); } }
+    details { border-top: 1px solid var(--line); padding: 10px 12px 12px; }
+    summary { cursor: pointer; color: var(--muted); font-weight: 650; margin-bottom: 10px; }
+    .config-form { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; align-items: end; }
+    .config-form.compact { grid-template-columns: repeat(3, minmax(120px, 1fr)); margin-top: 10px; }
+    label { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: 11px; }
+    label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    input, select { width: 100%; min-width: 0; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 6px; padding: 7px 8px; font: inherit; }
+    label.check { display: flex; align-items: center; gap: 8px; padding-bottom: 7px; }
+    label.check input { width: auto; }
+    output { color: var(--muted); min-height: 18px; align-self: center; }
+    @media (max-width: 920px) { .steps { grid-template-columns: 1fr; } }
+    @media (max-width: 760px) { .config-form, .config-form.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 520px) { main { padding: 10px; } .grid { grid-template-columns: 1fr; } header.top { padding: 0 12px; } nav a { display: none; } .stats { grid-template-columns: repeat(2, 1fr); } .config-form, .config-form.compact { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -507,9 +952,36 @@ function renderPage(req, cameraId = null) {
       <a href="/go2rtc.yml">go2rtc</a>
     </nav>
   </header>
-  <main><div class="grid">${cards}</div></main>
+  <main>${manager}<div class="grid ${cameraId ? 'detail-grid' : ''}">${cards}</div></main>
   <script>
     const audioPlayers = new Map()
+    const liveReconnectAt = new Map()
+    const LIVE_RECONNECT_MS = 25000
+    const PREVIEW_REFRESH_MS = 2000
+
+    function cameraPath(id, suffix) {
+      return '/cam/' + encodeURIComponent(id) + suffix
+    }
+
+    function refreshPreviews() {
+      for (const img of document.querySelectorAll('img[data-preview]')) {
+        const id = img.dataset.preview
+        img.src = cameraPath(id, '/snapshot.jpg?ts=') + Date.now()
+      }
+    }
+
+    function reconnectLive(id, force) {
+      const img = document.querySelector('img[data-live="' + id + '"]')
+      if (!img) return
+      const now = Date.now()
+      if (!force && liveReconnectAt.has(id) && now - liveReconnectAt.get(id) < LIVE_RECONNECT_MS) return
+      liveReconnectAt.set(id, now)
+      img.src = cameraPath(id, '/video.mjpg?ts=') + now
+    }
+
+    function reconnectLiveStreams() {
+      for (const img of document.querySelectorAll('img[data-live]')) reconnectLive(img.dataset.live, false)
+    }
 
     function joinBytes(a, b) {
       if (!a || a.length === 0) return b
@@ -603,6 +1075,79 @@ function renderPage(req, cameraId = null) {
       if (!id) return
       startAudio(id, ev.target).catch(() => {})
     })
+
+    async function sendJson(url, method, body) {
+      const res = await fetch(url, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'request failed')
+      return data
+    }
+
+    function readForm(form) {
+      const data = {}
+      for (const el of Array.from(form.elements)) {
+        if (!el.name) continue
+        if (el.type === 'checkbox') data[el.name] = el.checked
+        else if (el.value !== '') data[el.name] = el.value
+      }
+      return data
+    }
+
+    document.addEventListener('submit', async (ev) => {
+      const form = ev.target
+      const out = form.querySelector('output')
+      try {
+        if (form.dataset.addCamera !== undefined) {
+          ev.preventDefault()
+          await sendJson('/api/cameras', 'POST', readForm(form))
+          location.reload()
+        } else if (form.dataset.updateCamera) {
+          ev.preventDefault()
+          await sendJson('/api/cameras/' + encodeURIComponent(form.dataset.updateCamera), 'PATCH', readForm(form))
+          if (out) out.textContent = 'Saved'
+        } else if (form.dataset.wifiCamera) {
+          ev.preventDefault()
+          await sendJson('/api/cameras/' + encodeURIComponent(form.dataset.wifiCamera) + '/wifi', 'POST', readForm(form))
+          if (out) out.textContent = 'Sent'
+        } else if (form.dataset.wizardWifi !== undefined) {
+          ev.preventDefault()
+          const data = readForm(form)
+          if (!data.id) throw new Error('camera is required')
+          delete data.id
+          await sendJson('/api/cameras/' + encodeURIComponent(form.elements.id.value) + '/wifi', 'POST', data)
+          if (out) out.textContent = 'Sent'
+        }
+      } catch (err) {
+        if (out) out.textContent = err.message
+      }
+    })
+
+    document.addEventListener('click', async (ev) => {
+      const reconnectId = ev.target && ev.target.dataset && ev.target.dataset.liveReconnect
+      if (reconnectId) {
+        ev.preventDefault()
+        reconnectLive(reconnectId, true)
+        return
+      }
+
+      const action = ev.target && ev.target.dataset && ev.target.dataset.command
+      const id = ev.target && ev.target.dataset && ev.target.dataset.id
+      if (!action || !id) return
+      ev.preventDefault()
+      const old = ev.target.textContent
+      try {
+        ev.target.textContent = '...'
+        await sendJson('/api/cameras/' + encodeURIComponent(id) + '/' + action, 'POST')
+        ev.target.textContent = old
+      } catch (_) {
+        ev.target.textContent = old
+      }
+    })
+
     async function poll() {
       try {
         const res = await fetch('/api/status', { cache: 'no-store' })
@@ -612,7 +1157,10 @@ function renderPage(req, cameraId = null) {
           if (el) { el.textContent = cam.connected ? 'online' : 'connecting'; el.className = 'state ' + (cam.connected ? 'ok' : 'warn') }
           const fields = {
             videoFrames: cam.videoFrames,
+            videoFps: cam.videoFps,
+            videoKbps: cam.videoKbps,
             audioFrames: cam.audioFrames,
+            streamMode: cam.streamMode,
             clients: cam.videoClients + '/' + cam.audioClients,
             restartCount: cam.restartCount
           }
@@ -624,6 +1172,14 @@ function renderPage(req, cameraId = null) {
       } catch (_) {}
     }
     setInterval(poll, 3000)
+    setInterval(refreshPreviews, PREVIEW_REFRESH_MS)
+    setInterval(reconnectLiveStreams, 5000)
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        refreshPreviews()
+        for (const img of document.querySelectorAll('img[data-live]')) reconnectLive(img.dataset.live, true)
+      }
+    })
   </script>
 </body>
 </html>`
@@ -661,19 +1217,16 @@ ${enabled.map((r) => `  ${r.id}: ffmpeg:${base}/cam/${r.id}/video.mjpg#video=h26
 `
 }
 
-function route(req, res) {
+async function route(req, res) {
   const parsed = new URL(req.url, `http://${req.headers.host || 'localhost'}`)
   const pathname = parsed.pathname
 
+  if (pathname.startsWith('/api/')) {
+    if (await handleApi(req, res, pathname)) return
+  }
+
   if (pathname === '/') {
     writeText(res, 200, renderPage(req), 'text/html; charset=utf-8')
-    return
-  }
-  if (pathname === '/api/status') {
-    writeJson(res, 200, {
-      server: { host: PUBLIC_HOST, port: PORT, bind: BIND },
-      cameras: allStatuses(req),
-    })
     return
   }
   if (pathname === '/frigate.yml') {
@@ -707,7 +1260,7 @@ function route(req, res) {
     runtime.addAudioClient(req, res, 'wav')
   } else if (action === 'audio.raw') {
     runtime.addAudioClient(req, res, 'raw')
-  } else if (action === 'snapshot.jpg') {
+  } else if (action === 'snapshot.jpg' || action === 'preview.jpg') {
     runtime.writeSnapshot(res)
   } else {
     writeJson(res, 404, { error: 'unknown camera endpoint', id, action })
@@ -716,10 +1269,14 @@ function route(req, res) {
 
 const server = http.createServer((req, res) => {
   try {
-    route(req, res)
+    Promise.resolve(route(req, res)).catch((err) => {
+      console.error(`${nowIso()} request failed: ${err.stack || err}`)
+      if (!res.headersSent) writeJson(res, err.statusCode || 500, { error: err.message || 'internal error' })
+      else res.destroy()
+    })
   } catch (err) {
     console.error(`${nowIso()} request failed: ${err.stack || err}`)
-    if (!res.headersSent) writeJson(res, 500, { error: 'internal error' })
+    if (!res.headersSent) writeJson(res, err.statusCode || 500, { error: err.message || 'internal error' })
     else res.destroy()
   }
 })

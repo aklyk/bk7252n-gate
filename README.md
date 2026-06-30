@@ -5,10 +5,12 @@ Local gateway for cheap BK7252N/A9-style PPPP cameras.
 The main service keeps a local PPPP session to each camera and exposes:
 
 - Safari/Chrome dashboard
+- compact snapshot previews on the overview page
 - MJPEG video
 - WAV/raw PCM audio
 - snapshots
 - status JSON
+- local setup wizard for camera AP / no-internet provisioning
 - go2rtc/Frigate config snippets
 
 This is intended for cameras you own and operate on your LAN. It does not require reflashing the camera.
@@ -39,6 +41,20 @@ Useful endpoints:
 /go2rtc.yml
 ```
 
+Camera management API:
+
+```text
+GET    /api/cameras
+POST   /api/cameras
+GET    /api/cameras/<id>
+PATCH  /api/cameras/<id>
+DELETE /api/cameras/<id>
+POST   /api/cameras/<id>/wifi
+POST   /api/cameras/<id>/restart
+POST   /api/cameras/<id>/reboot
+POST   /api/cameras/<id>/params
+```
+
 For DID prefix `EEE`, the local PPPP PSK is usually `SHIX`.
 
 ## Repository Layout
@@ -64,7 +80,9 @@ The generated snippet uses go2rtc/ffmpeg to restream MJPEG as H.264 RTSP. Audio 
 
 ## Camera Setup
 
-If a camera is already on Wi-Fi, no UART is needed for streaming. If you need to configure Wi-Fi without the vendor app, UART provisioning is the most reliable known path right now:
+If a camera is already on Wi-Fi, no UART is needed for streaming. If you need to configure Wi-Fi without the vendor app, the dashboard has an offline setup wizard that still works when your computer is connected to the camera AP and has no internet.
+
+UART provisioning remains the most reliable known fallback:
 
 ```text
 setenv workmode sta

@@ -81,6 +81,9 @@ class PPPP extends EventEmitter {
     this.discoveryMessage = crypt.encrypt(Buffer.from('f1300000', 'hex'), this.cryptoKey)
     this.broadcastTimer = null
     this.closed = false
+    this.ackRepeats = Number.isInteger(this.options.ackRepeats) ? this.options.ackRepeats : 2
+    if (this.ackRepeats < 1) this.ackRepeats = 1
+    if (this.ackRepeats > 9) this.ackRepeats = 9
 
     this.IP_DEBUG_MSG = null
 
@@ -172,6 +175,24 @@ class PPPP extends EventEmitter {
     }
   }
 
+  sendEncryptedRepeats(buf, repeats = 1) {
+    const encrypted = crypt.encrypt(buf, this.cryptoKey)
+    for (let i = 0; i < repeats; i += 1) this.send(encrypted)
+  }
+
+  sendDRWAck(channel, index) {
+    let buf = Buffer.alloc(10)
+    buf.writeUint8(MCAM, 0)
+    buf.writeUint8(MSG_DRW_ACK, 1)
+    buf.writeUInt16BE(6, 2)
+    buf.writeUInt8(MDRW, 4)
+    buf.writeUInt8(channel, 5)
+    buf.writeUInt16BE(1, 6)
+    buf.writeUInt16BE(index, 8)
+    this.sendEncryptedRepeats(buf, this.ackRepeats)
+    this.emit('log', `Sent ${TYPE_DICT[MSG_DRW_ACK]} x${this.ackRepeats}`)
+  }
+
   handlePacket(p, msg, rinfo) {
       //console.log(TYPE_DICT[p.type], p.size, p.channel, p.index)
       if (p.type == MSG_DRW) {
@@ -228,46 +249,13 @@ class PPPP extends EventEmitter {
         buf.writeUint16BE(0, 2)
 
         // this.send(crypt.encrypt(buf).toString("hex"))
-        this.sendEnc(buf)
-        this.sendEnc(buf)
-        this.sendEnc(buf)
-        this.sendEnc(buf)
-        this.sendEnc(buf)
-        this.sendEnc(buf)
-        this.sendEnc(buf)
-        this.sendEnc(buf)
-        this.sendEnc(buf)
-        this.sendEnc(buf)
-        this.sendEnc(buf)
-        this.sendEnc(buf)
-        this.sendEnc(buf)
-        this.sendEnc(buf)
+        this.sendEncryptedRepeats(buf, 3)
         this.emit('log', `Sent ${TYPE_DICT[MSG_ALIVE]}`)
       }
 
       //handle MSG_DRW
       if (p.type == MSG_DRW) {
-        //send MSG_DRW_ACK
-        let buf = Buffer.alloc(10)
-        buf.writeUint8(MCAM, 0)
-        buf.writeUint8(MSG_DRW_ACK, 1)
-        buf.writeUInt16BE(6, 2)
-        buf.writeUInt8(0xd1, 4)
-        buf.writeUInt8(p.channel, 5)
-        buf.writeUInt16BE(1, 6)
-        buf.writeUInt16BE(p.index, 8)
-
-        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
-        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
-        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
-        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
-        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
-        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
-        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
-        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
-        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
-        this.emit('log', `Sent ${TYPE_DICT[MSG_DRW_ACK]} x3`)
-
+        this.sendDRWAck(p.channel, p.index)
 
         //handle CMD Response
         if (p.channel == 0) {
