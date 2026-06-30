@@ -82,6 +82,9 @@ For DID prefix `EEE`, the local PPPP PSK is usually `SHIX`.
 
 Generated archives, firmware dumps, local configs and captures are intentionally not tracked.
 
+Firmware command and cloud/push notes are documented in
+[`docs/research/a9_stock_firmware_dump.md`](docs/research/a9_stock_firmware_dump.md).
+
 ## Frigate
 
 Open:
@@ -109,6 +112,68 @@ reboot
 ```
 
 Those settings are stored in the camera flash and survive reboots.
+
+## Router Blocking
+
+The safest anti-cloud setup is to block camera WAN egress on the router and allow
+only LAN traffic between cameras and this gateway. Firmware plaintext strings
+from this camera show these external targets:
+
+```text
+120.79.76.240:9093   hardcoded cypush login endpoint
+120.76.44.223:9093   current EasyFlash push_ip/push_port value seen on the test camera
+cn.ntp.org.cn        firmware NTP fallback
+cn.pool.ntp.org      firmware NTP fallback
+ntp1.aliyun.com      firmware NTP fallback
+114.114.114.114      only appears as a DNS CLI example; block defensively if desired
+```
+
+`ilnk.work` was not found in this camera firmware dump (`decrc2m`, raw 2 MiB
+and raw 4 MiB were checked). It is still a reasonable defensive DNS block for
+iLnk/PPCS clients or app-derived traffic; on 2026-06-30 it resolved to:
+
+```text
+ilnk.work A     34.41.139.193
+ilnk.work AAAA  2600:1900:4001:96e:8000:1:697:b36
+```
+
+Older iLnk/cam-reverse APK research also observed these P2P hello targets, not
+confirmed as plaintext targets in this BK7252N firmware:
+
+```text
+139.155.68.77
+119.45.114.92
+162.62.63.154
+3.132.215.40
+```
+
+The firmware has a PPCS/P2P stack that can resolve servers dynamically, so
+blocking only static domains/IPs is weaker than blocking all WAN egress for
+camera IPs. Example OpenWrt firewall rule:
+
+```sh
+uci add firewall rule
+uci set firewall.@rule[-1].name='Block BKCam WAN'
+uci set firewall.@rule[-1].src='lan'
+uci add_list firewall.@rule[-1].src_ip='192.168.1.162'
+uci add_list firewall.@rule[-1].src_ip='192.168.1.203'
+uci set firewall.@rule[-1].dest='wan'
+uci set firewall.@rule[-1].target='REJECT'
+uci commit firewall
+/etc/init.d/firewall reload
+```
+
+Adjust `src_ip` to your camera DHCP reservations. If you only want DNS-level
+blocking for the known Chinese NTP names:
+
+```sh
+uci add_list dhcp.@dnsmasq[0].address='/cn.ntp.org.cn/0.0.0.0'
+uci add_list dhcp.@dnsmasq[0].address='/cn.pool.ntp.org/0.0.0.0'
+uci add_list dhcp.@dnsmasq[0].address='/ntp1.aliyun.com/0.0.0.0'
+uci add_list dhcp.@dnsmasq[0].address='/ilnk.work/0.0.0.0'
+uci commit dhcp
+/etc/init.d/dnsmasq restart
+```
 
 ## Third-Party Code
 

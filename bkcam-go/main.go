@@ -48,11 +48,19 @@ const (
 	videoStaleWindow     = 8 * time.Second
 	audioStaleWindow     = 4 * time.Second
 	mediaRestartWindow   = 25 * time.Second
+	mediaNudgeCooldown   = 8 * time.Second
 	restartCooldown      = 5 * time.Second
 	videoHoldInterval    = 1 * time.Second
 	videoHoldWindow      = 75 * time.Second
 	videoClientIdle      = 90 * time.Second
 	audioClientIdle      = 30 * time.Second
+
+	cmdSetSysparms = 9100
+	cmdGetSysparms = 9101
+	cmdGetCloud    = 9102
+	cmdGetWhite    = 9103
+	cmdGetSound    = 9104
+	cmdSetCyPush   = 9105
 )
 
 var keyTable = [256]byte{
@@ -210,8 +218,17 @@ type Client struct {
 }
 
 type CommandResult struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+	OK      bool           `json:"ok"`
+	Error   string         `json:"error,omitempty"`
+	Timeout bool           `json:"timeout,omitempty"`
+	Raw     string         `json:"raw,omitempty"`
+	Data    map[string]any `json:"data,omitempty"`
+	Sent    map[string]any `json:"sent,omitempty"`
+}
+
+type commandResponse struct {
+	Raw  string
+	Data map[string]any
 }
 
 type CameraRuntime struct {
@@ -236,15 +253,19 @@ type CameraRuntime struct {
 	videoMetric []metricPoint
 	audioMetric []metricPoint
 
-	lastFrameBytes int
-	streamMode     string
-	lastError      string
-	lastCommand    string
-	restartCount   int
-	lastRestartAt  time.Time
+	lastFrameBytes  int
+	streamMode      string
+	lastError       string
+	lastCommand     string
+	lastCommandAt   time.Time
+	lastCommandJSON map[string]any
+	commandWaiters  map[int][]chan commandResponse
+	restartCount    int
+	lastRestartAt   time.Time
 
 	lastVideoRequest time.Time
 	lastAudioRequest time.Time
+	lastMediaNudge   time.Time
 
 	videoClients map[*Client]struct{}
 	audioClients map[*Client]struct{}
@@ -546,6 +567,60 @@ func inputInt(input map[string]any, key string, fallback int) int {
 	return fallback
 }
 
+func optionalInt(input map[string]any, key string, min, max int) (int, bool, error) {
+	v, ok := input[key]
+	if !ok || v == nil {
+		return 0, false, nil
+	}
+	if s, ok := v.(string); ok && strings.TrimSpace(s) == "" {
+		return 0, false, nil
+	}
+	value := asIntValue(v, min-1)
+	if value < min || value > max {
+		return 0, false, httpErr(http.StatusBadRequest, fmt.Sprintf("%s must be between %d and %d", key, min, max))
+	}
+	return value, true, nil
+}
+
+func optionalEnumInt(input map[string]any, key string, allowed map[int]bool) (int, bool, error) {
+	v, ok := input[key]
+	if !ok || v == nil {
+		return 0, false, nil
+	}
+	if s, ok := v.(string); ok && strings.TrimSpace(s) == "" {
+		return 0, false, nil
+	}
+	value := asIntValue(v, -999999)
+	if !allowed[value] {
+		return 0, false, httpErr(http.StatusBadRequest, fmt.Sprintf("%s has unsupported value %d", key, value))
+	}
+	return value, true, nil
+}
+
+func parseCommandJSON(raw string) map[string]any {
+	raw = strings.TrimSpace(raw)
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start < 0 || end < start {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(raw[start:end+1]), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func intFromMap(m map[string]any, key string, fallback int) int {
+	if m == nil {
+		return fallback
+	}
+	if v, ok := m[key]; ok {
+		return asIntValue(v, fallback)
+	}
+	return fallback
+}
+
 func boolPtr(v bool) *bool {
 	return &v
 }
@@ -619,6 +694,98 @@ func writeText(w http.ResponseWriter, status int, text, contentType string) {
 	_, _ = io.WriteString(w, text)
 }
 
+func normalizeLang(lang string) string {
+	switch strings.ToLower(strings.TrimSpace(lang)) {
+	case "ru":
+		return "ru"
+	case "en":
+		return "en"
+	default:
+		return ""
+	}
+}
+
+func requestLang(r *http.Request) string {
+	if lang := normalizeLang(r.URL.Query().Get("lang")); lang != "" {
+		return lang
+	}
+	if cookie, err := r.Cookie("bkcam_lang"); err == nil {
+		if lang := normalizeLang(cookie.Value); lang != "" {
+			return lang
+		}
+	}
+	return "ru"
+}
+
+func tr(lang, key string) string {
+	if value, ok := uiText[lang][key]; ok {
+		return value
+	}
+	if value, ok := uiText["ru"][key]; ok {
+		return value
+	}
+	return key
+}
+
+var uiText = map[string]map[string]string{
+	"ru": {
+		"dashboard": "Камеры", "setup": "Настройка", "status": "Статус", "setupNew": "Добавить камеру",
+		"overviewMeta": "На главной легкие превью; живой поток и звук открываются в карточке камеры.",
+		"openLive":     "Открыть live", "sound": "Звук", "stop": "Стоп", "reconnectVideo": "Переподключить видео", "snapshot": "Снимок", "rawMJPEG": "MJPEG напрямую", "rawWAV": "WAV напрямую",
+		"video": "Видео", "fps": "FPS", "videoKbps": "Видео kbps", "audio": "Аудио", "clients": "Клиенты", "restarts": "Рестарты", "mode": "Режим", "peer": "Peer",
+		"localSettings": "Локальный профиль", "cameraSettings": "Настройки камеры", "maintenance": "Обслуживание",
+		"reconnectSession": "Переподключить сессию", "refreshInfo": "Прочитать параметры", "rebootHardware": "Перезагрузить камеру", "rebootConfirm": "Перезагрузить железо камеры?",
+		"wifiSSID": "Wi-Fi SSID", "wifiPassword": "Пароль Wi-Fi", "reboot": "Перезагрузка", "setWifi": "Записать Wi-Fi",
+		"saved": "Сохранено", "sent": "Отправлено", "writing": "Запись...", "read": "Прочитано", "apply": "Применить", "readFromCamera": "Прочитать из камеры",
+		"leave": "Не менять", "streamProfile": "Поток", "streamStop": "Остановить видео", "streamQVGA": "320x240, легче для Wi-Fi", "streamVGA": "640x480, больше нагрузка",
+		"audioStream": "Аудиопоток", "audioOn": "Включить", "audioOff": "Выключить", "bitrate": "Битрейт", "brightness": "Яркость", "contrast": "Контраст",
+		"irCut": "IR-cut", "lamp": "Подсветка", "antiFlicker": "Anti-flicker", "rotateMirror": "Поворот/зеркало",
+		"motionDetect": "Детекция движения", "motionDelay": "Задержка движения, с", "audioDetect": "Детекция звука", "audioDelay": "Задержка звука, с",
+		"sleepTime": "Sleep time, с", "offlineTime": "Offline time, с", "limitPush": "Лимит push", "environment": "Окружение/язык", "experimental": "Экспериментально",
+		"qualityGroup": "Качество и картинка", "alarmGroup": "Детекция", "systemGroup": "Питание и облако", "cloudHardening": "Отключить push фото/видео", "cloudHardeningHelp": "Записывает isPushPic=0 и isPushVideo=0. Для приватности все равно режьте WAN камеры на роутере.",
+		"resetImage": "Сбросить картинку", "deviceReadHint": "Чтение параметров - диагностика: на этой прошивке оно может временно уронить поток. Для обычной настройки меняйте только понятные поля.",
+		"deviceConfigHelp": "Команды отправляются в стоковую прошивку по Wi-Fi через PPPP JSON. UART не нужен. Пустые поля не меняются.",
+		"deviceConfigWarn": "Разрешение stream влияет на текущую сессию. Для Frigate и dashboard локальный профиль ширины/высоты задается выше.",
+		"name":             "Имя", "cameraIP": "IP камеры", "discovery": "Discovery", "localBind": "Local bind", "psk": "PSK", "user": "Пользователь", "password": "Пароль",
+		"ackRepeats": "ACK repeats", "width": "Ширина", "height": "Высота", "requestAV": "Запрашивать AV stream", "enabled": "Включена", "save": "Сохранить",
+		"wizardTitle": "Настройка новой камеры", "wizardMeta": "Мастер полностью локальный и работает, когда ноутбук подключен к AP камеры без интернета.",
+		"wizardStep1": "1. Подготовка", "wizardStep1Text": "Подключите ноутбук к AP камеры или к той же LAN, где камера уже доступна. Оставьте эту страницу открытой с локального сервера.",
+		"wizardStep2": "2. Записать Wi-Fi и сохранить", "wizardStep2Text": "Сервер подключится к текущему адресу камеры, отправит Wi-Fi настройки и сохранит финальный LAN-адрес в локальный конфиг.",
+		"wizardStep3": "3. Вернуться в LAN", "wizardStep3Text": "После перезагрузки подключите ноутбук обратно к целевой Wi-Fi сети. Dashboard будет использовать сохраненный LAN-адрес.",
+		"wizardStep4": "4. Уже добавленные камеры", "wizardStep4Text": "Для существующей камеры используйте карточку камеры: локальный профиль, настройки камеры и обслуживание.",
+		"targetSSID": "Целевой SSID", "targetPassword": "Пароль целевой сети", "currentIP": "Текущий IP", "currentDiscovery": "Текущий discovery",
+		"finalIP": "Финальный LAN IP", "finalDiscovery": "Финальный discovery", "cameraPassword": "Пароль камеры", "writeAndSave": "Записать и сохранить",
+	},
+	"en": {
+		"dashboard": "Dashboard", "setup": "Setup", "status": "Status", "setupNew": "Set up new camera",
+		"overviewMeta": "Snapshot previews keep the overview light; open a camera for live video and sound.",
+		"openLive":     "Open live", "sound": "Sound", "stop": "Stop", "reconnectVideo": "Reconnect video", "snapshot": "Snapshot", "rawMJPEG": "Raw MJPEG", "rawWAV": "Raw WAV",
+		"video": "Video", "fps": "FPS", "videoKbps": "Video kbps", "audio": "Audio", "clients": "Clients", "restarts": "Restarts", "mode": "Mode", "peer": "Peer",
+		"localSettings": "Local profile", "cameraSettings": "Camera settings", "maintenance": "Maintenance",
+		"reconnectSession": "Reconnect camera session", "refreshInfo": "Refresh camera info", "rebootHardware": "Restart camera hardware", "rebootConfirm": "Restart camera hardware?",
+		"wifiSSID": "Wi-Fi SSID", "wifiPassword": "Wi-Fi password", "reboot": "Reboot", "setWifi": "Set Wi-Fi",
+		"saved": "Saved", "sent": "Sent", "writing": "Writing...", "read": "Read", "apply": "Apply", "readFromCamera": "Read from camera",
+		"leave": "Leave unchanged", "streamProfile": "Stream", "streamStop": "Stop video", "streamQVGA": "320x240, lighter on Wi-Fi", "streamVGA": "640x480, higher load",
+		"audioStream": "Audio stream", "audioOn": "On", "audioOff": "Off", "bitrate": "Bitrate", "brightness": "Brightness", "contrast": "Contrast",
+		"irCut": "IR-cut", "lamp": "Light", "antiFlicker": "Anti-flicker", "rotateMirror": "Rotate/mirror",
+		"motionDetect": "Motion detect", "motionDelay": "Motion delay, s", "audioDetect": "Audio detect", "audioDelay": "Audio delay, s",
+		"sleepTime": "Sleep time, s", "offlineTime": "Offline time, s", "limitPush": "Push limit", "environment": "Environment/language", "experimental": "Experimental",
+		"qualityGroup": "Quality and image", "alarmGroup": "Detection", "systemGroup": "Power and cloud", "cloudHardening": "Disable push photos/videos", "cloudHardeningHelp": "Writes isPushPic=0 and isPushVideo=0. For privacy, still block camera WAN egress on the router.",
+		"resetImage": "Reset image", "deviceReadHint": "Readback is diagnostic: on this firmware it can briefly disrupt the stream. For normal use, change only fields you understand.",
+		"deviceConfigHelp": "Commands are sent to stock firmware over Wi-Fi via PPPP JSON. UART is not required. Empty fields are not changed.",
+		"deviceConfigWarn": "The stream resolution affects the current camera session. Frigate/dashboard width and height are set in the local profile above.",
+		"name":             "Name", "cameraIP": "Camera IP", "discovery": "Discovery", "localBind": "Local bind", "psk": "PSK", "user": "User", "password": "Password",
+		"ackRepeats": "ACK repeats", "width": "Width", "height": "Height", "requestAV": "Request AV stream", "enabled": "Enabled", "save": "Save",
+		"wizardTitle": "New camera setup", "wizardMeta": "This wizard is fully local and keeps working when your computer is connected to a camera AP without internet.",
+		"wizardStep1": "1. Prepare", "wizardStep1Text": "Connect this computer to the camera AP or to the same LAN as the camera. Keep this page open from the local server.",
+		"wizardStep2": "2. Write Wi-Fi and save", "wizardStep2Text": "The server reaches the camera at its current address, sends Wi-Fi settings, then stores the final LAN address locally.",
+		"wizardStep3": "3. Move back to LAN", "wizardStep3Text": "After reboot, connect this computer back to the target Wi-Fi. The dashboard will use the saved LAN address.",
+		"wizardStep4": "4. Existing cameras", "wizardStep4Text": "For a saved camera, use its card: local profile, camera settings and maintenance.",
+		"targetSSID": "Target SSID", "targetPassword": "Target password", "currentIP": "Current IP", "currentDiscovery": "Current discovery",
+		"finalIP": "Final LAN IP", "finalDiscovery": "Final discovery", "cameraPassword": "Camera password", "writeAndSave": "Write and save",
+	},
+}
+
 func (a *App) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", a.handleRoot)
@@ -626,6 +793,9 @@ func (a *App) routes() http.Handler {
 }
 
 func (a *App) handleRoot(w http.ResponseWriter, r *http.Request) {
+	if lang := normalizeLang(r.URL.Query().Get("lang")); lang != "" {
+		http.SetCookie(w, &http.Cookie{Name: "bkcam_lang", Value: lang, Path: "/", MaxAge: 86400 * 365})
+	}
 	path := r.URL.Path
 	if strings.HasPrefix(path, "/api/") {
 		if err := a.handleAPI(w, r, path); err != nil {
@@ -829,10 +999,22 @@ func (a *App) handleAPI(w http.ResponseWriter, r *http.Request, path string) err
 	case "params":
 		result := rt.RefreshParams()
 		if result.OK {
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id})
+			writeJSON(w, http.StatusOK, result)
 		} else {
 			writeJSON(w, http.StatusConflict, result)
 		}
+	case "device-refresh":
+		writeJSON(w, http.StatusOK, rt.RefreshDeviceConfig())
+	case "device-config":
+		result, err := rt.ApplyDeviceConfig(body)
+		if err != nil {
+			return err
+		}
+		status := http.StatusOK
+		if ok, _ := result["ok"].(bool); !ok {
+			status = http.StatusConflict
+		}
+		writeJSON(w, status, result)
 	case "reboot":
 		result := rt.Reboot()
 		if result.OK {
@@ -1215,6 +1397,8 @@ func htmlValue(v any) string {
 }
 
 func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) string {
+	lang := requestLang(r)
+	t := func(key string) string { return tr(lang, key) }
 	isSetup := len(mode) > 0 && mode[0] == "setup"
 	statuses := a.allStatuses(r)
 	configs := map[string]map[string]any{}
@@ -1234,14 +1418,14 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
 
 	manager := ""
 	if isSetup {
-		manager = renderWizard(a.defaultLanDiscovery())
+		manager = renderWizard(a.defaultLanDiscovery(), lang)
 	} else if cameraID == "" {
 		manager = `<section class="overview-head">
         <div>
-          <h2>Cameras</h2>
-          <p class="meta">Snapshot previews keep the overview light; open a camera for live video and sound.</p>
+          <h2>` + htmlValue(t("dashboard")) + `</h2>
+          <p class="meta">` + htmlValue(t("overviewMeta")) + `</p>
         </div>
-        <a class="primary" href="/setup">Set up new camera</a>
+        <a class="primary" href="/setup">` + htmlValue(t("setupNew")) + `</a>
       </section>`
 	}
 
@@ -1259,7 +1443,7 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
 		}
 		reconnectButton := ""
 		if cameraID != "" {
-			reconnectButton = fmt.Sprintf(`<button data-live-reconnect="%s">Reconnect video</button>`, htmlValue(id))
+			reconnectButton = fmt.Sprintf(`<button data-live-reconnect="%s">%s</button>`, htmlValue(id), htmlValue(t("reconnectVideo")))
 		}
 		cards = append(cards, fmt.Sprintf(`<section class="camera %s" data-camera-id="%s">
       <header class="camera-head">
@@ -1271,62 +1455,82 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       </header>
       <div class="media">%s</div>
       <div class="toolbar">
-        <a href="/cam/%s">Open live</a>
-        <button data-audio="%s">Sound</button>
+        <a href="/cam/%s">%s</a>
+        <button data-audio="%s">%s</button>
         %s
-        <a href="/cam/%s/snapshot.jpg" target="_blank">Snapshot</a>
+        <a href="/cam/%s/snapshot.jpg" target="_blank">%s</a>
       </div>
       <audio id="audio-%s" controls preload="none" hidden></audio>
       <dl class="stats">
-        <div><dt>Video</dt><dd data-field="%s:videoFrames">%s</dd></div>
+        <div><dt>%s</dt><dd data-field="%s:videoFrames">%s</dd></div>
         <div><dt>FPS</dt><dd data-field="%s:videoFps">%s</dd></div>
-        <div><dt>Video kbps</dt><dd data-field="%s:videoKbps">%s</dd></div>
-        <div><dt>Audio</dt><dd data-field="%s:audioFrames">%s</dd></div>
-        <div><dt>Status</dt><dd data-field="%s:healthLabel">%s</dd></div>
-        <div><dt>Clients</dt><dd data-field="%s:clients">%s/%s</dd></div>
-        <div><dt>Restarts</dt><dd data-field="%s:restartCount">%s</dd></div>
-        <div><dt>Mode</dt><dd data-field="%s:streamMode">%s</dd></div>
-        <div><dt>Peer</dt><dd data-field="%s:peer">%s</dd></div>
+        <div><dt>%s</dt><dd data-field="%s:videoKbps">%s</dd></div>
+        <div><dt>%s</dt><dd data-field="%s:audioFrames">%s</dd></div>
+        <div><dt>%s</dt><dd data-field="%s:healthLabel">%s</dd></div>
+        <div><dt>%s</dt><dd data-field="%s:clients">%s/%s</dd></div>
+        <div><dt>%s</dt><dd data-field="%s:restartCount">%s</dd></div>
+        <div><dt>%s</dt><dd data-field="%s:streamMode">%s</dd></div>
+        <div><dt>%s</dt><dd data-field="%s:peer">%s</dd></div>
       </dl>
       <details>
-        <summary>Settings</summary>
+        <summary>%s</summary>
         %s
       </details>
       <details>
-        <summary>Maintenance</summary>
+        <summary>%s</summary>
+        %s
+      </details>
+      <details>
+        <summary>%s</summary>
         <div class="toolbar maintenance">
-          <button data-command="restart" data-id="%s">Reconnect camera session</button>
-          <button data-command="params" data-id="%s">Refresh camera info</button>
-          <button data-command="reboot" data-confirm="Restart camera hardware?" data-id="%s">Restart camera hardware</button>
-          <a href="/cam/%s/video.mjpg" target="_blank">Raw MJPEG</a>
-          <a href="/cam/%s/audio.wav" target="_blank">Raw WAV</a>
+          <button data-command="restart" data-id="%s">%s</button>
+          <button data-command="params" data-id="%s">%s</button>
+          <button data-command="reboot" data-confirm="%s" data-id="%s">%s</button>
+          <a href="/cam/%s/video.mjpg" target="_blank">%s</a>
+          <a href="/cam/%s/audio.wav" target="_blank">%s</a>
         </div>
         <form data-wifi-camera="%s" class="config-form compact">
-          <label><span>Wi-Fi SSID</span><input name="ssid" autocomplete="off"></label>
-          <label><span>Wi-Fi password</span><input name="password" type="password" autocomplete="new-password"></label>
-          <label class="check"><input name="reboot" type="checkbox" checked><span>Reboot</span></label>
-          <button type="submit">Set Wi-Fi</button>
+          <label><span>%s</span><input name="ssid" autocomplete="off"></label>
+          <label><span>%s</span><input name="password" type="password" autocomplete="new-password"></label>
+          <label class="check"><input name="reboot" type="checkbox" checked><span>%s</span></label>
+          <button type="submit">%s</button>
           <output></output>
         </form>
       </details>
     </section>`,
 			mapBool(cameraID != "", "detail", "summary-card"), htmlValue(id), name, ip, htmlValue(id), state, label, media,
-			pathID, htmlValue(id), reconnectButton, pathID, htmlValue(id),
+			pathID, htmlValue(t("openLive")), htmlValue(id), htmlValue(t("sound")), reconnectButton, pathID, htmlValue(t("snapshot")), htmlValue(id),
+			htmlValue(t("video")),
 			htmlValue(id), htmlValue(c["videoFrames"]),
 			htmlValue(id), htmlValue(c["videoFps"]),
+			htmlValue(t("videoKbps")),
 			htmlValue(id), htmlValue(c["videoKbps"]),
+			htmlValue(t("audio")),
 			htmlValue(id), htmlValue(c["audioFrames"]),
+			htmlValue(t("status")),
 			htmlValue(id), label,
+			htmlValue(t("clients")),
 			htmlValue(id), htmlValue(c["videoClients"]), htmlValue(c["audioClients"]),
+			htmlValue(t("restarts")),
 			htmlValue(id), htmlValue(c["restartCount"]),
+			htmlValue(t("mode")),
 			htmlValue(id), htmlValue(c["streamMode"]),
+			htmlValue(t("peer")),
 			htmlValue(id), htmlValue(firstNonEmpty(fmt.Sprint(c["peerAddress"]), fmt.Sprint(c["expectedAddress"]))),
-			renderCameraConfigForm(configs[id]),
-			htmlValue(id), htmlValue(id), htmlValue(id), pathID, pathID, htmlValue(id)))
+			htmlValue(t("localSettings")),
+			renderCameraConfigForm(configs[id], lang),
+			htmlValue(t("cameraSettings")),
+			renderDeviceConfigForm(id, lang),
+			htmlValue(t("maintenance")),
+			htmlValue(id), htmlValue(t("reconnectSession")),
+			htmlValue(id), htmlValue(t("refreshInfo")),
+			htmlValue(t("rebootConfirm")), htmlValue(id), htmlValue(t("rebootHardware")),
+			pathID, htmlValue(t("rawMJPEG")), pathID, htmlValue(t("rawWAV")), htmlValue(id),
+			htmlValue(t("wifiSSID")), htmlValue(t("wifiPassword")), htmlValue(t("reboot")), htmlValue(t("setWifi"))))
 	}
 
 	return `<!doctype html>
-<html lang="en">
+<html lang="` + htmlValue(lang) + `">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1381,6 +1585,11 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
     label.check { display: flex; align-items: center; gap: 8px; padding-bottom: 7px; }
     label.check input { width: auto; }
     output { color: var(--muted); min-height: 18px; align-self: center; }
+    .camera-device-help { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+    .device-form > .camera-device-help { grid-column: 1 / -1; }
+    .form-section { grid-column: 1 / -1; padding: 8px 0 0; border-top: 1px solid var(--line); }
+    .form-section .config-form { margin-top: 8px; }
+    .device-output { grid-column: 1 / -1; margin: 0; max-height: 220px; overflow: auto; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 8px; font-size: 11px; white-space: pre-wrap; }
     @media (max-width: 920px) { .steps { grid-template-columns: 1fr; } }
     @media (max-width: 760px) { .config-form, .config-form.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     @media (max-width: 520px) { main { padding: 10px; } .grid { grid-template-columns: 1fr; } header.top { padding: 0 12px; } nav a { display: none; } .stats { grid-template-columns: repeat(2, 1fr); } .config-form, .config-form.compact { grid-template-columns: 1fr; } }
@@ -1390,15 +1599,25 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
   <header class="top">
     <h1>BKCam</h1>
     <nav>
-      <a href="/">Dashboard</a>
-      <a href="/setup">Setup</a>
-      <a href="/api/status">Status</a>
+      <a href="/">` + htmlValue(t("dashboard")) + `</a>
+      <a href="/setup">` + htmlValue(t("setup")) + `</a>
+      <a href="/api/status">` + htmlValue(t("status")) + `</a>
       <a href="/frigate.yml">Frigate</a>
       <a href="/go2rtc.yml">go2rtc</a>
+      <a href="?lang=ru">RU</a>
+      <a href="?lang=en">EN</a>
     </nav>
   </header>
   <main>` + manager + `<div class="grid ` + mapBool(cameraID != "", "detail-grid", "") + `">` + strings.Join(cards, "") + `</div></main>
   <script>
+    const UI = {
+      saved: ` + strconv.Quote(t("saved")) + `,
+      sent: ` + strconv.Quote(t("sent")) + `,
+      writing: ` + strconv.Quote(t("writing")) + `,
+      read: ` + strconv.Quote(t("read")) + `,
+      sound: ` + strconv.Quote(t("sound")) + `,
+      stop: ` + strconv.Quote(t("stop")) + `
+    }
     const audioPlayers = new Map()
     const liveReconnectAt = new Map()
     const LIVE_RECONNECT_MS = 25000
@@ -1462,7 +1681,7 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       state.active = false
       state.controller.abort()
       state.ctx.close().catch(() => {})
-      if (state.button) state.button.textContent = 'Sound'
+      if (state.button) state.button.textContent = UI.sound
     }
 
     async function startAudio(id, button) {
@@ -1485,7 +1704,7 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       const controller = new AbortController()
       const state = { active: true, button, controller, ctx, nextTime: ctx.currentTime + 0.12 }
       audioPlayers.set(id, state)
-      button.textContent = 'Stop'
+      button.textContent = UI.stop
 
       try {
         const res = await fetch(cameraPath(id, '/audio.raw'), { cache: 'no-store', signal: controller.signal })
@@ -1545,18 +1764,28 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       try {
         if (form.dataset.provisionCamera !== undefined) {
           ev.preventDefault()
-          if (out) out.textContent = 'Writing...'
+          if (out) out.textContent = UI.writing
           await sendJson('/api/setup/provision', 'POST', readForm(form))
-          if (out) out.textContent = 'Saved'
+          if (out) out.textContent = UI.saved
           setTimeout(() => { location.href = '/' }, 700)
         } else if (form.dataset.updateCamera) {
           ev.preventDefault()
           await sendJson('/api/cameras/' + encodeURIComponent(form.dataset.updateCamera), 'PATCH', readForm(form))
-          if (out) out.textContent = 'Saved'
+          if (out) out.textContent = UI.saved
         } else if (form.dataset.wifiCamera) {
           ev.preventDefault()
           await sendJson('/api/cameras/' + encodeURIComponent(form.dataset.wifiCamera) + '/wifi', 'POST', readForm(form))
-          if (out) out.textContent = 'Sent'
+          if (out) out.textContent = UI.sent
+        } else if (form.dataset.deviceCamera) {
+          ev.preventDefault()
+          const pre = form.querySelector('.device-output')
+          if (out) out.textContent = UI.writing
+          const data = await sendJson('/api/cameras/' + encodeURIComponent(form.dataset.deviceCamera) + '/device-config', 'POST', readForm(form))
+          if (out) out.textContent = data.ok ? UI.sent : (data.error || 'error')
+          if (pre) {
+            pre.hidden = false
+            pre.textContent = JSON.stringify(data, null, 2)
+          }
         }
       } catch (err) {
         if (out) out.textContent = err.message
@@ -1568,6 +1797,29 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       if (reconnectId) {
         ev.preventDefault()
         reconnectLive(reconnectId, true)
+        return
+      }
+
+      const readId = ev.target && ev.target.dataset && ev.target.dataset.deviceRead
+      if (readId) {
+        ev.preventDefault()
+        const form = ev.target.closest('form')
+        const out = form && form.querySelector('output')
+        const pre = form && form.querySelector('.device-output')
+		  const old = ev.target.textContent
+		  try {
+		    ev.target.textContent = '...'
+		    const data = await sendJson('/api/cameras/' + encodeURIComponent(readId) + '/device-refresh', 'POST')
+		    if (out) out.textContent = data.ok ? UI.read : 'timeout'
+		    if (pre) {
+		      pre.hidden = false
+		      pre.textContent = JSON.stringify(data, null, 2)
+          }
+        } catch (err) {
+          if (out) out.textContent = err.message
+        } finally {
+          ev.target.textContent = old
+        }
         return
       }
 
@@ -1629,69 +1881,147 @@ func renderInput(name, label string, value any, attrs string) string {
 	return fmt.Sprintf(`<label><span>%s</span><input name="%s" value="%s" %s></label>`, htmlValue(label), htmlValue(name), htmlValue(value), attrs)
 }
 
-func renderCameraConfigForm(camera map[string]any) string {
+func renderSelect(name, label string, options [][2]string) string {
+	var b strings.Builder
+	b.WriteString(`<label><span>`)
+	b.WriteString(htmlValue(label))
+	b.WriteString(`</span><select name="`)
+	b.WriteString(htmlValue(name))
+	b.WriteString(`">`)
+	for _, option := range options {
+		b.WriteString(`<option value="`)
+		b.WriteString(htmlValue(option[0]))
+		b.WriteString(`">`)
+		b.WriteString(htmlValue(option[1]))
+		b.WriteString(`</option>`)
+	}
+	b.WriteString(`</select></label>`)
+	return b.String()
+}
+
+func renderCameraConfigForm(camera map[string]any, lang string) string {
 	if camera == nil {
 		return ""
 	}
+	t := func(key string) string { return tr(lang, key) }
 	return `<form data-update-camera="` + htmlValue(camera["id"]) + `" class="config-form">
-      ` + renderInput("name", "Name", camera["name"], "") + `
-      ` + renderInput("ip", "Camera IP", camera["ip"], `inputmode="numeric" autocomplete="off"`) + `
-      ` + renderInput("discovery", "Discovery", camera["discovery"], `inputmode="numeric" autocomplete="off"`) + `
-      ` + renderInput("localAddress", "Local bind", camera["localAddress"], `inputmode="numeric" autocomplete="off"`) + `
-      ` + renderInput("psk", "PSK", camera["psk"], `autocomplete="off"`) + `
-      ` + renderInput("username", "User", camera["username"], `autocomplete="off"`) + `
-      ` + renderInput("password", "Password", "", `type="password" placeholder="keep current" autocomplete="new-password"`) + `
-      ` + renderInput("ackRepeats", "ACK repeats", camera["ackRepeats"], `type="number" min="1" max="9"`) + `
-      ` + renderInput("width", "Width", camera["width"], `type="number" min="1"`) + `
-      ` + renderInput("height", "Height", camera["height"], `type="number" min="1"`) + `
-      <label class="check"><input name="avStream" type="checkbox" ` + mapBool(asBoolValue(camera["avStream"], true), "checked", "") + `><span>Request AV stream</span></label>
-      <label class="check"><input name="enabled" type="checkbox" ` + mapBool(asBoolValue(camera["enabled"], true), "checked", "") + `><span>Enabled</span></label>
-      <button type="submit">Save</button>
+      ` + renderInput("name", t("name"), camera["name"], "") + `
+      ` + renderInput("ip", t("cameraIP"), camera["ip"], `inputmode="numeric" autocomplete="off"`) + `
+      ` + renderInput("discovery", t("discovery"), camera["discovery"], `inputmode="numeric" autocomplete="off"`) + `
+      ` + renderInput("localAddress", t("localBind"), camera["localAddress"], `inputmode="numeric" autocomplete="off"`) + `
+      ` + renderInput("psk", t("psk"), camera["psk"], `autocomplete="off"`) + `
+      ` + renderInput("username", t("user"), camera["username"], `autocomplete="off"`) + `
+      ` + renderInput("password", t("password"), "", `type="password" placeholder="keep current" autocomplete="new-password"`) + `
+      ` + renderInput("ackRepeats", t("ackRepeats"), camera["ackRepeats"], `type="number" min="1" max="9"`) + `
+      ` + renderInput("width", t("width"), camera["width"], `type="number" min="1"`) + `
+      ` + renderInput("height", t("height"), camera["height"], `type="number" min="1"`) + `
+      <label class="check"><input name="avStream" type="checkbox" ` + mapBool(asBoolValue(camera["avStream"], true), "checked", "") + `><span>` + htmlValue(t("requestAV")) + `</span></label>
+      <label class="check"><input name="enabled" type="checkbox" ` + mapBool(asBoolValue(camera["enabled"], true), "checked", "") + `><span>` + htmlValue(t("enabled")) + `</span></label>
+      <button type="submit">` + htmlValue(t("save")) + `</button>
       <output></output>
     </form>`
 }
 
-func renderWizard(lanDiscovery string) string {
+func renderDeviceConfigForm(id, lang string) string {
+	t := func(key string) string { return tr(lang, key) }
+	leave := t("leave")
+	return `<form data-device-camera="` + htmlValue(id) + `" class="config-form device-form">
+      <p class="camera-device-help">` + htmlValue(t("deviceConfigHelp")) + `</p>
+      <p class="camera-device-help">` + htmlValue(t("deviceConfigWarn")) + `</p>
+      ` + renderSelect("streamMode", t("streamProfile"), [][2]string{
+		{"", leave},
+		{"qvga", t("streamQVGA")},
+		{"vga", t("streamVGA")},
+		{"stop", t("streamStop")},
+	}) + `
+      ` + renderSelect("audioStream", t("audioStream"), [][2]string{
+		{"", leave},
+		{"on", t("audioOn")},
+		{"off", t("audioOff")},
+	}) + `
+      <button type="button" data-device-read="` + htmlValue(id) + `">` + htmlValue(t("readFromCamera")) + `</button>
+      <button type="submit">` + htmlValue(t("apply")) + `</button>
+      <output></output>
+      <details class="form-section" open>
+        <summary>` + htmlValue(t("qualityGroup")) + `</summary>
+        <div class="config-form">
+          ` + renderInput("bitrate", t("bitrate"), "", `type="number" min="1" max="64" placeholder="26"`) + `
+          ` + renderInput("brightness", t("brightness"), "", `type="number" min="0" max="6" placeholder="4"`) + `
+          ` + renderInput("contrast", t("contrast"), "", `type="number" min="0" max="6" placeholder="2"`) + `
+          ` + renderSelect("irCut", t("irCut"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}}) + `
+          ` + renderSelect("lamp", t("lamp"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}}) + `
+          ` + renderSelect("antiFlicker", t("antiFlicker"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}}) + `
+          ` + renderSelect("rotateMirror", t("rotateMirror"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}, {"2", "2"}, {"3", "3"}}) + `
+          <label class="check"><input name="resetImage" type="checkbox"><span>` + htmlValue(t("resetImage")) + `</span></label>
+        </div>
+      </details>
+      <details class="form-section">
+        <summary>` + htmlValue(t("alarmGroup")) + `</summary>
+        <div class="config-form">
+          ` + renderSelect("motionDetect", t("motionDetect"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}}) + `
+          ` + renderInput("motionDelay", t("motionDelay"), "", `type="number" min="1" max="600"`) + `
+          ` + renderSelect("audioDetect", t("audioDetect"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}}) + `
+          ` + renderInput("audioDelay", t("audioDelay"), "", `type="number" min="1" max="600"`) + `
+        </div>
+      </details>
+      <details class="form-section">
+        <summary>` + htmlValue(t("systemGroup")) + `</summary>
+        <p class="camera-device-help">` + htmlValue(t("cloudHardeningHelp")) + `</p>
+        <div class="config-form">
+          ` + renderInput("sleepTime", t("sleepTime"), "", `type="number" min="1" max="86400"`) + `
+          ` + renderInput("offlineTime", t("offlineTime"), "", `type="number" min="1" max="3600"`) + `
+          ` + renderInput("limitPush", t("limitPush"), "", `type="number" min="1" max="100000"`) + `
+          ` + renderSelect("environment", t("environment"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}, {"2", "2"}, {"3", "3"}}) + `
+          <label class="check"><input name="disablePushUpload" type="checkbox"><span>` + htmlValue(t("cloudHardening")) + `</span></label>
+        </div>
+      </details>
+      <p class="camera-device-help">` + htmlValue(t("deviceReadHint")) + `</p>
+      <pre class="device-output" hidden></pre>
+    </form>`
+}
+
+func renderWizard(lanDiscovery, lang string) string {
+	t := func(key string) string { return tr(lang, key) }
 	return `<section class="wizard setup-wizard">
       <header class="section-head">
         <div>
-          <h2>New camera setup</h2>
-          <p class="meta">This wizard is fully local and keeps working when your computer is connected to a camera AP without internet.</p>
+          <h2>` + htmlValue(t("wizardTitle")) + `</h2>
+          <p class="meta">` + htmlValue(t("wizardMeta")) + `</p>
         </div>
       </header>
       <div class="steps">
         <section class="step">
-          <strong>1. Prepare</strong>
-          <p>Connect this computer to the camera AP or to the same LAN as the camera. Keep this page open from the local server; no internet is required.</p>
+          <strong>` + htmlValue(t("wizardStep1")) + `</strong>
+          <p>` + htmlValue(t("wizardStep1Text")) + `</p>
         </section>
         <section class="step">
-          <strong>2. Write Wi-Fi and save camera</strong>
-          <p>The server first reaches the camera at its current address, sends Wi-Fi settings, then stores the LAN address in the local config. If the final IP is unknown, leave it empty and use LAN broadcast discovery.</p>
+          <strong>` + htmlValue(t("wizardStep2")) + `</strong>
+          <p>` + htmlValue(t("wizardStep2Text")) + `</p>
           <form data-provision-camera class="config-form">
             <label><span>ID</span><input name="id" required pattern="[A-Za-z0-9_-]+" autocomplete="off" placeholder="a9_front"></label>
-            <label><span>Name</span><input name="name" autocomplete="off" placeholder="Front door"></label>
-            <label><span>Current IP</span><input name="setupIp" placeholder="192.168.4.1" inputmode="numeric" autocomplete="off"></label>
-            <label><span>Current discovery</span><input name="setupDiscovery" placeholder="255.255.255.255" inputmode="numeric" autocomplete="off"></label>
-            <label><span>Target SSID</span><input name="ssid" autocomplete="off"></label>
-            <label><span>Target password</span><input name="wifiPassword" type="password" autocomplete="new-password"></label>
-            <label><span>Final LAN IP</span><input name="finalIp" placeholder="optional" inputmode="numeric" autocomplete="off"></label>
-            <label><span>Final discovery</span><input name="finalDiscovery" placeholder="` + htmlValue(lanDiscovery) + `" inputmode="numeric" autocomplete="off"></label>
-            <label><span>PSK</span><input name="psk" value="SHIX" autocomplete="off"></label>
-            <label><span>User</span><input name="username" value="admin" autocomplete="off"></label>
-            <label><span>Camera password</span><input name="password" type="password" value="6666" autocomplete="new-password"></label>
+            <label><span>` + htmlValue(t("name")) + `</span><input name="name" autocomplete="off" placeholder="Front door"></label>
+            <label><span>` + htmlValue(t("currentIP")) + `</span><input name="setupIp" placeholder="192.168.4.1" inputmode="numeric" autocomplete="off"></label>
+            <label><span>` + htmlValue(t("currentDiscovery")) + `</span><input name="setupDiscovery" placeholder="255.255.255.255" inputmode="numeric" autocomplete="off"></label>
+            <label><span>` + htmlValue(t("targetSSID")) + `</span><input name="ssid" autocomplete="off"></label>
+            <label><span>` + htmlValue(t("targetPassword")) + `</span><input name="wifiPassword" type="password" autocomplete="new-password"></label>
+            <label><span>` + htmlValue(t("finalIP")) + `</span><input name="finalIp" placeholder="optional" inputmode="numeric" autocomplete="off"></label>
+            <label><span>` + htmlValue(t("finalDiscovery")) + `</span><input name="finalDiscovery" placeholder="` + htmlValue(lanDiscovery) + `" inputmode="numeric" autocomplete="off"></label>
+            <label><span>` + htmlValue(t("psk")) + `</span><input name="psk" value="SHIX" autocomplete="off"></label>
+            <label><span>` + htmlValue(t("user")) + `</span><input name="username" value="admin" autocomplete="off"></label>
+            <label><span>` + htmlValue(t("cameraPassword")) + `</span><input name="password" type="password" value="6666" autocomplete="new-password"></label>
             <label><span>ACK</span><input name="ackRepeats" type="number" min="1" max="9" value="3"></label>
-            <label class="check"><input name="reboot" type="checkbox" checked><span>Reboot</span></label>
-            <button type="submit">Write and save</button>
+            <label class="check"><input name="reboot" type="checkbox" checked><span>` + htmlValue(t("reboot")) + `</span></label>
+            <button type="submit">` + htmlValue(t("writeAndSave")) + `</button>
             <output></output>
           </form>
         </section>
         <section class="step">
-          <strong>3. Move back to LAN</strong>
-          <p>After reboot, connect this computer back to the target Wi-Fi. The dashboard will use the saved LAN address for the stream.</p>
+          <strong>` + htmlValue(t("wizardStep3")) + `</strong>
+          <p>` + htmlValue(t("wizardStep3Text")) + `</p>
         </section>
         <section class="step">
-          <strong>4. Existing cameras</strong>
-          <p>For a camera already saved in the config, open its card and use Settings or Maintenance. This wizard is only for initial provisioning.</p>
+          <strong>` + htmlValue(t("wizardStep4")) + `</strong>
+          <p>` + htmlValue(t("wizardStep4Text")) + `</p>
         </section>
       </div>
     </section>`
@@ -1725,11 +2055,12 @@ func (a *App) renderGo2RTC(base string) string {
 
 func NewCameraRuntime(cfg CameraConfig) *CameraRuntime {
 	return &CameraRuntime{
-		cfg:          cfg,
-		streamMode:   "idle",
-		videoClients: map[*Client]struct{}{},
-		audioClients: map[*Client]struct{}{},
-		stopCh:       make(chan struct{}),
+		cfg:            cfg,
+		streamMode:     "idle",
+		videoClients:   map[*Client]struct{}{},
+		audioClients:   map[*Client]struct{}{},
+		commandWaiters: map[int][]chan commandResponse{},
+		stopCh:         make(chan struct{}),
 	}
 }
 
@@ -1749,6 +2080,10 @@ func (rt *CameraRuntime) UpdateConfig(cfg CameraConfig) {
 	rt.lastFrameBytes = 0
 	rt.streamMode = "idle"
 	rt.lastCommand = ""
+	rt.lastCommandAt = time.Time{}
+	rt.lastCommandJSON = nil
+	rt.commandWaiters = map[int][]chan commandResponse{}
+	rt.lastMediaNudge = time.Time{}
 	rt.videoClients = map[*Client]struct{}{}
 	rt.audioClients = map[*Client]struct{}{}
 	rt.mu.Unlock()
@@ -1817,10 +2152,26 @@ func (rt *CameraRuntime) Start() {
 		}
 	}
 	pp.OnCommand = func(cmd string) {
+		raw := strings.TrimSpace(cmd)
+		data := parseCommandJSON(raw)
+		cmdID := intFromMap(data, "cmd", -1)
 		rt.mu.Lock()
-		rt.lastCommand = strings.TrimSpace(cmd)
-		rt.lastTraffic = time.Now()
+		rt.lastCommand = raw
+		rt.lastCommandJSON = data
+		rt.lastCommandAt = time.Now()
+		rt.lastTraffic = rt.lastCommandAt
+		waiters := append([]chan commandResponse(nil), rt.commandWaiters[cmdID]...)
+		if cmdID >= 0 {
+			delete(rt.commandWaiters, cmdID)
+		}
 		rt.mu.Unlock()
+		resp := commandResponse{Raw: raw, Data: data}
+		for _, ch := range waiters {
+			select {
+			case ch <- resp:
+			default:
+			}
+		}
 	}
 	pp.OnClose = func(reason string) {
 		rt.restart(reason)
@@ -1950,13 +2301,48 @@ func (rt *CameraRuntime) streamLoop() {
 			continue
 		}
 		if staleVideo {
-			rt.requestStreams(false)
+			if !rt.nudgeStreams("video stale") {
+				rt.requestStreams(false)
+			}
 		} else if refreshVideo {
 			rt.requestStreams(false)
 		} else if staleAudio {
-			rt.requestStreams(false)
+			if !rt.nudgeStreams("audio stale") {
+				rt.requestStreams(false)
+			}
 		}
 	}
+}
+
+func (rt *CameraRuntime) nudgeStreams(reason string) bool {
+	rt.mu.Lock()
+	pp := rt.pppp
+	now := time.Now()
+	if pp == nil || rt.connectedAt.IsZero() || (!rt.lastMediaNudge.IsZero() && now.Sub(rt.lastMediaNudge) < mediaNudgeCooldown) {
+		rt.mu.Unlock()
+		return false
+	}
+	wantsAudio := len(rt.audioClients) > 0
+	videoMode := rt.cfg.videoMode()
+	rt.lastMediaNudge = now
+	rt.lastVideoRequest = now
+	if wantsAudio {
+		rt.lastAudioRequest = now
+	}
+	rt.streamMode = "media nudge"
+	rt.mu.Unlock()
+
+	go func() {
+		_ = pp.SendCommand(111, "stream", map[string]any{"video": 0})
+		time.Sleep(180 * time.Millisecond)
+		_ = pp.SendCommand(111, "stream", map[string]any{"video": videoMode})
+		if wantsAudio {
+			time.Sleep(80 * time.Millisecond)
+			_ = pp.SendCommand(111, "stream", map[string]any{"audio": 1})
+		}
+		log.Printf("camera %s media nudge: %s", rt.cfg.ID, reason)
+	}()
+	return true
 }
 
 func (rt *CameraRuntime) requestStreams(forceVideo bool, videoOnly ...bool) {
@@ -1964,7 +2350,7 @@ func (rt *CameraRuntime) requestStreams(forceVideo bool, videoOnly ...bool) {
 	pp := rt.pppp
 	now := time.Now()
 	wantsVideo := forceVideo || len(rt.videoClients) > 0 || len(rt.latestFrame) == 0 || now.Sub(rt.lastSnapshotDemand) < 10*time.Second
-	wantsAudio := len(rt.audioClients) > 0 || (rt.cfg.avStream() && wantsVideo)
+	wantsAudio := len(rt.audioClients) > 0
 	skipAudio := len(videoOnly) > 0 && videoOnly[0]
 	sendVideo := wantsVideo && (forceVideo || rt.lastVideoRequest.IsZero() || now.Sub(rt.lastVideoRequest) >= streamRequestWindow)
 	sendAudio := wantsAudio && !skipAudio && (forceVideo || rt.lastAudioRequest.IsZero() || now.Sub(rt.lastAudioRequest) >= streamRequestWindow)
@@ -2011,6 +2397,10 @@ func (rt *CameraRuntime) sendGetParams() error {
 }
 
 func (rt *CameraRuntime) command(cmd int, pro string, args map[string]any) CommandResult {
+	return rt.commandWithResponse(cmd, pro, args, 1500*time.Millisecond)
+}
+
+func (rt *CameraRuntime) commandWithResponse(cmd int, pro string, args map[string]any, timeout time.Duration) CommandResult {
 	rt.mu.RLock()
 	pp := rt.pppp
 	connected := !rt.connectedAt.IsZero()
@@ -2018,10 +2408,51 @@ func (rt *CameraRuntime) command(cmd int, pro string, args map[string]any) Comma
 	if pp == nil || !connected {
 		return CommandResult{OK: false, Error: "camera is not connected"}
 	}
+	payload := map[string]any{"pro": pro, "cmd": cmd}
+	for k, v := range args {
+		payload[k] = v
+	}
+	wait := make(chan commandResponse, 1)
+	rt.mu.Lock()
+	if rt.commandWaiters == nil {
+		rt.commandWaiters = map[int][]chan commandResponse{}
+	}
+	rt.commandWaiters[cmd] = append(rt.commandWaiters[cmd], wait)
+	rt.mu.Unlock()
 	if err := pp.SendCommand(cmd, pro, args); err != nil {
+		rt.removeCommandWaiter(cmd, wait)
 		return CommandResult{OK: false, Error: err.Error()}
 	}
-	return CommandResult{OK: true}
+	if timeout <= 0 {
+		return CommandResult{OK: true, Sent: payload}
+	}
+	select {
+	case resp := <-wait:
+		out := CommandResult{OK: true, Raw: resp.Raw, Data: resp.Data, Sent: payload}
+		if result := intFromMap(resp.Data, "result", 0); result != 0 {
+			out.OK = false
+			out.Error = fmt.Sprintf("camera returned result %d", result)
+		}
+		return out
+	case <-time.After(timeout):
+		rt.removeCommandWaiter(cmd, wait)
+		return CommandResult{OK: true, Timeout: true, Sent: payload}
+	}
+}
+
+func (rt *CameraRuntime) removeCommandWaiter(cmd int, ch chan commandResponse) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	waiters := rt.commandWaiters[cmd]
+	for i, waiter := range waiters {
+		if waiter == ch {
+			rt.commandWaiters[cmd] = append(waiters[:i], waiters[i+1:]...)
+			break
+		}
+	}
+	if len(rt.commandWaiters[cmd]) == 0 {
+		delete(rt.commandWaiters, cmd)
+	}
 }
 
 func (rt *CameraRuntime) SetWifi(ssid, password string) CommandResult {
@@ -2047,6 +2478,185 @@ func (rt *CameraRuntime) RefreshParams() CommandResult {
 
 func (rt *CameraRuntime) Reboot() CommandResult {
 	return rt.command(102, "dev_control", map[string]any{"reboot": 1})
+}
+
+func (rt *CameraRuntime) RefreshDeviceConfig() map[string]any {
+	commands := []struct {
+		name string
+		cmd  int
+		pro  string
+	}{
+		{name: "get_parms", cmd: 101, pro: "get_parms"},
+		{name: "get_cyalarm", cmd: 107, pro: "get_cyalarm"},
+		{name: "get_wifi", cmd: 112, pro: "get_wifi"},
+		{name: "get_sysparms", cmd: cmdGetSysparms, pro: "get_sysparms"},
+		{name: "get_cloudsupport", cmd: cmdGetCloud, pro: "get_cloudsupport"},
+		{name: "get_whiteLight", cmd: cmdGetWhite, pro: "get_whiteLight"},
+		{name: "get_sound_light_alarm", cmd: cmdGetSound, pro: "get_sound_light_alarm"},
+	}
+	out := map[string]any{"ok": true}
+	var results []map[string]any
+	for _, command := range commands {
+		result := rt.commandWithResponse(command.cmd, command.pro, nil, 1800*time.Millisecond)
+		if result.Timeout {
+			result.OK = false
+			result.Error = "camera did not answer this read command"
+		}
+		if !result.OK {
+			out["ok"] = false
+		}
+		results = append(results, map[string]any{
+			"name":   command.name,
+			"result": result,
+		})
+	}
+	out["commands"] = results
+	return out
+}
+
+func (rt *CameraRuntime) ApplyDeviceConfig(input map[string]any) (map[string]any, error) {
+	out := map[string]any{"ok": true}
+	var commands []map[string]any
+	add := func(name string, result CommandResult) {
+		if !result.OK {
+			out["ok"] = false
+		}
+		commands = append(commands, map[string]any{"name": name, "result": result})
+	}
+
+	if streamMode := inputString(input, "streamMode", ""); streamMode != "" {
+		videoMode := 0
+		switch streamMode {
+		case "stop":
+			videoMode = 0
+		case "vga":
+			videoMode = 1
+		case "qvga":
+			videoMode = 2
+		default:
+			return nil, httpErr(http.StatusBadRequest, "streamMode must be qvga, vga or stop")
+		}
+		add("stream.video", rt.commandWithResponse(111, "stream", map[string]any{"video": videoMode}, 1800*time.Millisecond))
+	}
+
+	if audioMode := inputString(input, "audioStream", ""); audioMode != "" {
+		audio := 0
+		switch audioMode {
+		case "off":
+			audio = 0
+		case "on":
+			audio = 1
+		default:
+			return nil, httpErr(http.StatusBadRequest, "audioStream must be on or off")
+		}
+		add("stream.audio", rt.commandWithResponse(111, "stream", map[string]any{"audio": audio}, 1800*time.Millisecond))
+	}
+
+	devControl := map[string]any{}
+	if value, ok, err := optionalInt(input, "bitrate", 1, 64); err != nil {
+		return nil, err
+	} else if ok {
+		devControl["rate_bit"] = value
+	}
+	if value, ok, err := optionalInt(input, "brightness", 0, 6); err != nil {
+		return nil, err
+	} else if ok {
+		devControl["bright"] = value
+	}
+	if value, ok, err := optionalInt(input, "contrast", 0, 6); err != nil {
+		return nil, err
+	} else if ok {
+		devControl["contrast"] = value
+	}
+	if value, ok, err := optionalEnumInt(input, "irCut", map[int]bool{0: true, 1: true}); err != nil {
+		return nil, err
+	} else if ok {
+		devControl["icut"] = value
+	}
+	if value, ok, err := optionalEnumInt(input, "lamp", map[int]bool{0: true, 1: true}); err != nil {
+		return nil, err
+	} else if ok {
+		devControl["lamp"] = value
+	}
+	if value, ok, err := optionalEnumInt(input, "antiFlicker", map[int]bool{0: true, 1: true}); err != nil {
+		return nil, err
+	} else if ok {
+		devControl["anti_flicker"] = value
+	}
+	if value, ok, err := optionalEnumInt(input, "rotateMirror", map[int]bool{0: true, 1: true, 2: true, 3: true}); err != nil {
+		return nil, err
+	} else if ok {
+		devControl["rotmir"] = value
+	}
+	if inputBool(input, "resetImage", false) {
+		devControl["resetrb"] = 1
+	}
+	if len(devControl) > 0 {
+		add("dev_control", rt.commandWithResponse(102, "dev_control", devControl, 1800*time.Millisecond))
+	}
+
+	alarm := map[string]any{}
+	if value, ok, err := optionalEnumInt(input, "motionDetect", map[int]bool{0: true, 1: true}); err != nil {
+		return nil, err
+	} else if ok {
+		alarm["motionDetect"] = value
+	}
+	if value, ok, err := optionalInt(input, "motionDelay", 1, 600); err != nil {
+		return nil, err
+	} else if ok {
+		alarm["motionDelay"] = value
+	}
+	if value, ok, err := optionalEnumInt(input, "audioDetect", map[int]bool{0: true, 1: true}); err != nil {
+		return nil, err
+	} else if ok {
+		alarm["audioDetect"] = value
+	}
+	if value, ok, err := optionalInt(input, "audioDelay", 1, 600); err != nil {
+		return nil, err
+	} else if ok {
+		alarm["audioDelay"] = value
+	}
+	if len(alarm) > 0 {
+		add("set_cyalarm", rt.commandWithResponse(108, "set_cyalarm", alarm, 1800*time.Millisecond))
+	}
+
+	system := map[string]any{}
+	if value, ok, err := optionalInt(input, "sleepTime", 1, 86400); err != nil {
+		return nil, err
+	} else if ok {
+		system["sleep_time"] = value
+	}
+	if value, ok, err := optionalInt(input, "offlineTime", 1, 3600); err != nil {
+		return nil, err
+	} else if ok {
+		system["offline_time"] = value
+	}
+	if value, ok, err := optionalInt(input, "limitPush", 1, 100000); err != nil {
+		return nil, err
+	} else if ok {
+		system["limit_push"] = value
+	}
+	if value, ok, err := optionalEnumInt(input, "environment", map[int]bool{0: true, 1: true, 2: true, 3: true}); err != nil {
+		return nil, err
+	} else if ok {
+		system["environment"] = value
+	}
+	if len(system) > 0 {
+		add("set_sysparms", rt.commandWithResponse(cmdSetSysparms, "set_sysparms", system, 1800*time.Millisecond))
+	}
+
+	if inputBool(input, "disablePushUpload", false) {
+		add("set_cypush", rt.commandWithResponse(cmdSetCyPush, "set_cypush", map[string]any{
+			"isPushPic":   0,
+			"isPushVideo": 0,
+		}, 1800*time.Millisecond))
+	}
+
+	if len(commands) == 0 {
+		return nil, httpErr(http.StatusBadRequest, "no camera settings selected")
+	}
+	out["commands"] = commands
+	return out, nil
 }
 
 func (rt *CameraRuntime) Status(base string) map[string]any {

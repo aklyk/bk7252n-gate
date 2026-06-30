@@ -29,9 +29,9 @@
 - MAC Wi-Fi STA: `00:00:00:15:06:04`.
 - UDP PPPP listener на камере: `32108`.
 - Логин камеры: `admin`.
-- Пароль камеры: `6666`.
-- DID: `EEE-313703-EJMWX`.
-- apiLicense из env: `GENWJH`.
+- Пароль камеры: `<redacted>`.
+- DID: `<redacted>`.
+- apiLicense из env: `<redacted>`.
 - crckey / local PPPP PSK: `SHIX`.
 
 Важно: пароль от ноутбука/пользователя в этот бандл не включён и не нужен.
@@ -55,13 +55,13 @@
 После отправки `9f a1 ee b9` камера отвечает `MSG_PUNCH`:
 
 ```text
-decoded: f1 41 00 14 45 45 45 00 00 00 00 00 00 04 c9 67 45 4a 4d 57 58 00 00 00
+decoded: f1 41 ... <redacted uid bytes>
 ```
 
 Это даёт UID/DID:
 
 ```text
-EEE-313703-EJMWX
+<redacted DID>
 ```
 
 ## BKCam server

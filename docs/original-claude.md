@@ -16,7 +16,7 @@
   download `0x143000`+`0xBB000` | EasyFlash `0x1FD000`+`0x1000` | **rfparam `0x1FE000`** | **netparam `0x1FF000`**.
   Оба на устройствах `beken_onchip_crc` (boot+app) и `beken_onchip` (остальное), флеш 2 МБ (len 0x400000 — это с CRC).
   ⚠️ НЕ трогать bootloader/rfparam/netparam (RF-калибровка + MAC). Шить только `app` @ 0x10000.
-- Конфиг стока (EasyFlash): `ssid0=pdtest passwd0=123456789 workmode=ap`, логин `admin/6666`, P2P did `EEE-314151-BKXXY`.
+- Конфиг стока (EasyFlash): `ssid0=<redacted> passwd0=<redacted> workmode=ap`, логин `admin/<redacted>`, P2P did `<redacted>`.
 - **SDK 3.0.76 подтверждён → Маршрут A реален**: ищем исходники этого SDK (там драйвер камеры BK7252N).
 
 ## Цель

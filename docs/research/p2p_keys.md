@@ -1,13 +1,14 @@
-# P2P/PPCS ключи и идентификаторы камеры (из прошивки + конфига)
+# P2P/PPCS ключи и идентификаторы камеры (санитизировано)
 
 Протокол: **PPCS** (CS2 Network / "PPPP" / iLnkP2P) — то, что реализует cam-reverse.
-Ниже — материал, достаточный, чтобы локальный клиент аутентифицировался и расшифровал поток.
+Файл оставлен как историческая заметка. Живые DID, apiLicense, appkey, Wi-Fi и пароли не должны
+храниться в публичном репозитории.
 
 ## Идентификаторы устройства (из printenv / EasyFlash)
-- DID: `EEE-314151-BKXXY`
-- apiLicense: `VYUQCS`
+- DID: `<redacted>`
+- apiLicense: `<redacted>`
 - crckey: `SHIX`
-- appkey: `FFD…` (усечён в конфиге)
+- appkey: `<redacted>`
 
 ## PPCS Init-строки (APILicense), вытащены из дампа
 Это аргумент PPCS_Initialize — кодирует поддерживаемые префиксы DID и крипто. Для cam-reverse

@@ -4,10 +4,17 @@ node_modules/
 __pycache__/
 *.pyc
 *.log
+.env
+*.local
+*.local.json
+*.secret.json
+*.private.md
 
 # Local runtime configuration and captures
 bkcam-server/config.json
 bkcam-go/config.json
+private/
+local-private/
 *.pcap
 *.pcapng
 *.mjpg
@@ -23,6 +30,7 @@ bkcam-go/config.json
 # Local build outputs
 a9serv/pppp
 bkcam-go/bkcam
+bkcam-go/bkcam-go
 dist/
 build/
 coverage/

@@ -23,7 +23,7 @@ BK7252N требует вендорского **Beken SDK 3.0.76** (на нём 
 - Прошивка стока: `CYCAM_T99_v32_0226`, **RT-Thread 3.1.0**, **Beken SDK Rev 3.0.76**. SD НЕТ (конфиг в EasyFlash).
 - Флеш 2 МБ. Разделы (FAL): bootloader `0x0` | **app `0x10000`** (1152K) | download `0x143000` |
   EasyFlash `0x1FD000` | rfparam `0x1FE000` (RF-калибровка) | netparam `0x1FF000` (MAC). НЕ трогать boot/rfparam/netparam.
-- MAC `00:00:00:15:09:84`. P2P DID `EEE-314151-BKXXY`.
+- MAC `<redacted>`. P2P DID `<redacted>`.
 
 ## Живой доступ к камере (как управлять)
 - UART-переходник CP210x, **COM3**, 115200 8N1. Распайка: P11=TX чипа, P10=RX, GND=корпус USB; питание micro-USB.
@@ -39,7 +39,7 @@ BK7252N требует вендорского **Beken SDK 3.0.76** (на нём 
 - Дамп шифр-формата: Beken CRC-interleave (32+2); анализировать де-интерлейснутый образ.
 
 ## Ключи P2P (для cam-reverse / своего PPCS-клиента)
-DID `EEE-314151-BKXXY`, crckey `SHIX`, apiLicense `VYUQCS`, + 5 PPCS init-строк (`EEGD…`) — в `docs/p2p_keys.md`.
+DID `<redacted>`, crckey `SHIX`, apiLicense `<redacted>`, + PPCS init-строки (`EE...`) — в `docs/p2p_keys.md`.
 PPCS-«шифрование» — известный XOR, cam-reverse его умеет. Облако НЕ нужно (PPCS LAN-режим).
 
 ## Сборка своей прошивки (РАБОТАЕТ, рецепт)
