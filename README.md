@@ -81,7 +81,7 @@ Open:
 http://<server-ip>:8088/frigate.yml
 ```
 
-The generated snippet uses go2rtc/ffmpeg to restream MJPEG as H.264 RTSP. Audio is currently available separately as WAV/raw PCM endpoints.
+The generated snippet uses go2rtc/ffmpeg to restream MJPEG as H.264 and the WAV/PCM endpoint as AAC/Opus audio, so Frigate can consume one RTSP stream with video and sound.
 
 ## Camera Setup
 

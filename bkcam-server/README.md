@@ -129,18 +129,24 @@ curl -X POST http://127.0.0.1:8088/api/setup/provision \
 http://<server-ip>:8088/frigate.yml
 ```
 
-И перенеси блоки `go2rtc` и `cameras` в конфиг Frigate. Сервис отдаёт MJPEG, go2rtc/ffmpeg превращает его в RTSP/H.264 stream:
+И перенеси блоки `ffmpeg`, `go2rtc` и `cameras` в конфиг Frigate. Сервис отдаёт MJPEG и WAV/PCM, go2rtc/ffmpeg превращает это в один RTSP stream с H.264 видео и AAC audio:
 
 ```yaml
+ffmpeg:
+  output_args:
+    record: preset-record-generic-audio-aac
+
 go2rtc:
   streams:
-    a9_test: ffmpeg:http://192.168.1.179:8088/cam/a9_test/video.mjpg#video=h264
+    a9_test:
+      - 'ffmpeg:http://192.168.1.179:8088/cam/a9_test/video.mjpg#video=h264'
+      - 'ffmpeg:http://192.168.1.179:8088/cam/a9_test/audio.wav#audio=aac#audio=opus'
 
 cameras:
   a9_test:
     ffmpeg:
       inputs:
-        - path: rtsp://127.0.0.1:8554/a9_test
+        - path: 'rtsp://127.0.0.1:8554/a9_test?video=h264&audio=aac'
           input_args: preset-rtsp-restream
           roles:
             - detect
@@ -150,7 +156,7 @@ cameras:
       height: 480
 ```
 
-Frigate/go2rtc export сейчас рассчитан на видео-поток. Аудио доступно отдельно:
+Для Frigate audio events можно дополнительно добавить role `audio` и включить `audio.enabled`, но для live/recordings это не обязательно: audio track уже есть в RTSP stream. Сырые endpoints остаются доступны для проверки:
 
 ```text
 http://<server-ip>:8088/cam/a9_test/audio.wav

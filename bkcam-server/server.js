@@ -73,6 +73,10 @@ function writeText(res, status, text, type = 'text/plain; charset=utf-8') {
   res.end(body)
 }
 
+function yamlQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`
+}
+
 function readJsonBody(req, maxBytes = 128 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = []
@@ -1402,13 +1406,13 @@ function renderPage(req, cameraId = null, mode = 'dashboard') {
 
 function renderFrigate(base) {
   const enabled = Array.from(runtimes.values()).filter((r) => r.camera.enabled !== false)
-  const streamLines = enabled.map((r) =>
-    `    ${r.id}: ffmpeg:${base}/cam/${r.id}/video.mjpg#video=h264`
-  ).join('\n')
+  const streamLines = enabled.map((r) => `    ${r.id}:
+      - ${yamlQuote(`ffmpeg:${base}/cam/${r.id}/video.mjpg#video=h264`)}
+      - ${yamlQuote(`ffmpeg:${base}/cam/${r.id}/audio.wav#audio=aac#audio=opus`)}`).join('\n')
   const cameraLines = enabled.map((r) => `  ${r.id}:
     ffmpeg:
       inputs:
-        - path: rtsp://127.0.0.1:8554/${r.id}
+        - path: ${yamlQuote(`rtsp://127.0.0.1:8554/${r.id}?video=h264&audio=aac`)}
           input_args: preset-rtsp-restream
           roles:
             - detect
@@ -1416,19 +1420,29 @@ function renderFrigate(base) {
     detect:
       width: ${r.camera.width || 640}
       height: ${r.camera.height || 480}`).join('\n')
-  return `go2rtc:
+  return `ffmpeg:
+  output_args:
+    record: preset-record-generic-audio-aac
+
+go2rtc:
   streams:
 ${streamLines}
 
 cameras:
 ${cameraLines}
+
+# Optional audio events:
+# Add role "audio" to the input roles and set "audio.enabled: true" per camera
+# if you want Frigate to create events from sound levels.
 `
 }
 
 function renderGo2rtc(base) {
   const enabled = Array.from(runtimes.values()).filter((r) => r.camera.enabled !== false)
   return `streams:
-${enabled.map((r) => `  ${r.id}: ffmpeg:${base}/cam/${r.id}/video.mjpg#video=h264`).join('\n')}
+${enabled.map((r) => `  ${r.id}:
+    - ${yamlQuote(`ffmpeg:${base}/cam/${r.id}/video.mjpg#video=h264`)}
+    - ${yamlQuote(`ffmpeg:${base}/cam/${r.id}/audio.wav#audio=aac#audio=opus`)}`).join('\n')}
 `
 }
 
