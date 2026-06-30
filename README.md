@@ -96,7 +96,7 @@ The generated snippet uses go2rtc/ffmpeg to restream MJPEG as H.264 and the WAV/
 
 If a camera is already on Wi-Fi, open `/setup` or add it from the API. If a new camera exposes its own AP, connect this computer to that AP, open `/setup`, enter the camera's current AP address/discovery, target Wi-Fi credentials and the final LAN address if you already know it. The wizard sends `set_wifi` over the camera's PPPP Wi-Fi session and saves the matching local camera config. No internet is required.
 
-For multiple cameras, prefer fixed DHCP leases and unicast `discovery` values equal to each camera IP. The PPPP client pins the session to the expected peer so one camera cannot silently occupy another camera card. The Go backend requests video and audio as separate PPPP stream commands; audio is requested only when the browser, WAV endpoint or Frigate/go2rtc opens an audio stream.
+For multiple cameras, prefer fixed DHCP leases and unicast `discovery` values equal to each camera IP. The PPPP client pins the session to the expected peer so one camera cannot silently occupy another camera card. With `avStream` enabled, the Go backend keeps the camera in audio+video stream mode even if only the MJPEG endpoint is open; this has proven more stable on weak A9 Wi-Fi links and keeps Frigate/go2rtc audio available. If Wi-Fi latency climbs under multiple MJPEG streams, set a camera to `width: 320` and `height: 240`; the backend will request the camera's lower-bandwidth `video:2` mode.
 
 UART is not part of the wizard. It is only a manual development/recovery fallback:
 

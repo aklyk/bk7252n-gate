@@ -37,7 +37,8 @@ go build -o bkcam
 ## Features
 
 - Multi-camera PPPP sessions with peer pinning by configured IP.
-- Safari-compatible MJPEG video and Web Audio raw PCM playback.
+- Safari-compatible MJPEG video with stream hold/recovery logic and Web Audio raw PCM playback.
+- 640x480 and 320x240 camera stream modes selected from camera width/height config.
 - Offline `/setup` wizard that writes Wi-Fi settings to the camera over PPPP and saves local config.
 - Camera CRUD and maintenance API compatible with the earlier Node backend.
 - Frigate/go2rtc snippets with video and audio restream sources.

@@ -44,11 +44,14 @@ const (
 	staleTrafficWindow   = 45 * time.Second
 	trafficRestartWindow = 60 * time.Second
 	streamRequestWindow  = 2 * time.Second
+	videoRefreshWindow   = 6 * time.Second
 	videoStaleWindow     = 8 * time.Second
 	audioStaleWindow     = 4 * time.Second
-	mediaRestartWindow   = 18 * time.Second
-	restartCooldown      = 8 * time.Second
-	videoClientIdle      = 20 * time.Second
+	mediaRestartWindow   = 25 * time.Second
+	restartCooldown      = 5 * time.Second
+	videoHoldInterval    = 1 * time.Second
+	videoHoldWindow      = 75 * time.Second
+	videoClientIdle      = 90 * time.Second
 	audioClientIdle      = 30 * time.Second
 )
 
@@ -145,6 +148,13 @@ func (c CameraConfig) height() int {
 		return c.Height
 	}
 	return 480
+}
+
+func (c CameraConfig) videoMode() int {
+	if c.width() <= 320 || c.height() <= 240 {
+		return 2
+	}
+	return 1
 }
 
 func (c CameraConfig) ackRepeats() int {
@@ -1141,6 +1151,7 @@ func publicConfig(cam CameraConfig) map[string]any {
 		"hasPassword":  cam.Password != "",
 		"width":        cam.width(),
 		"height":       cam.height(),
+		"videoMode":    cam.videoMode(),
 		"enabled":      cam.enabled(),
 		"verbose":      cam.Verbose,
 		"avStream":     cam.avStream(),
@@ -1782,6 +1793,7 @@ func (rt *CameraRuntime) Start() {
 		rt.lastVideoAt = now
 		rt.lastTraffic = now
 		rt.lastFrameBytes = len(frame)
+		rt.lastError = ""
 		atomic.AddUint64(&rt.videoFrames, 1)
 		rt.videoMetric = appendMetric(rt.videoMetric, now, len(frame))
 		clients := keys(rt.videoClients)
@@ -1795,6 +1807,7 @@ func (rt *CameraRuntime) Start() {
 		rt.mu.Lock()
 		rt.lastAudioAt = now
 		rt.lastTraffic = now
+		rt.lastError = ""
 		atomic.AddUint64(&rt.audioFrames, 1)
 		rt.audioMetric = appendMetric(rt.audioMetric, now, len(pcm))
 		clients := keys(rt.audioClients)
@@ -1849,13 +1862,13 @@ func (rt *CameraRuntime) Stop() {
 	}
 }
 
-func (rt *CameraRuntime) restart(reason string) {
+func (rt *CameraRuntime) restart(reason string) bool {
 	now := time.Now()
 	rt.mu.Lock()
 	if !rt.lastRestartAt.IsZero() && now.Sub(rt.lastRestartAt) < restartCooldown {
 		rt.lastError = reason + " (restart throttled)"
 		rt.mu.Unlock()
-		return
+		return false
 	}
 	rt.lastError = reason
 	rt.lastRestartAt = now
@@ -1864,6 +1877,7 @@ func (rt *CameraRuntime) restart(reason string) {
 	log.Printf("camera %s restarting: %s", rt.cfg.ID, reason)
 	rt.Stop()
 	time.AfterFunc(1500*time.Millisecond, rt.Start)
+	return true
 }
 
 func (rt *CameraRuntime) healthLoop() {
@@ -1881,12 +1895,16 @@ func (rt *CameraRuntime) healthLoop() {
 		}
 		now := time.Now()
 		if connected.IsZero() && !started.IsZero() && now.Sub(started) > 20*time.Second {
-			rt.restart("connect timeout")
-			return
+			if rt.restart("connect timeout") {
+				return
+			}
+			continue
 		}
 		if !connected.IsZero() && !lastTraffic.IsZero() && now.Sub(lastTraffic) > trafficRestartWindow {
-			rt.restart("traffic timeout")
-			return
+			if rt.restart("traffic timeout") {
+				return
+			}
+			continue
 		}
 		if !connected.IsZero() {
 			_ = pp.SendAlive()
@@ -1909,10 +1927,9 @@ func (rt *CameraRuntime) streamLoop() {
 		audioAge := now.Sub(rt.lastAudioAt)
 		staleVideo := hasVideo && (rt.lastVideoAt.IsZero() || videoAge > videoStaleWindow)
 		staleAudio := hasAudio && (rt.lastAudioAt.IsZero() || audioAge > audioStaleWindow)
+		refreshVideo := hasVideo && !staleVideo && (rt.lastVideoRequest.IsZero() || now.Sub(rt.lastVideoRequest) >= videoRefreshWindow)
 		deadVideo := hasVideo && connected && ((rt.lastVideoAt.IsZero() && now.Sub(connectedAt) > mediaRestartWindow) || (!rt.lastVideoAt.IsZero() && videoAge > mediaRestartWindow))
-		deadAudio := hasAudio && connected && ((rt.lastAudioAt.IsZero() && now.Sub(connectedAt) > mediaRestartWindow) || (!rt.lastAudioAt.IsZero() && audioAge > mediaRestartWindow))
-		audioClients := keys(rt.audioClients)
-		audioSilent := hasAudio && (rt.lastAudioAt.IsZero() || audioAge > time.Second)
+		deadAudio := hasAudio && connected && !hasVideo && ((rt.lastAudioAt.IsZero() && now.Sub(connectedAt) > mediaRestartWindow) || (!rt.lastAudioAt.IsZero() && audioAge > mediaRestartWindow))
 		rt.mu.RUnlock()
 		if pp == nil {
 			return
@@ -1921,23 +1938,23 @@ func (rt *CameraRuntime) streamLoop() {
 			continue
 		}
 		if deadVideo {
-			rt.restart("video timeout")
-			return
+			if rt.restart("video timeout") {
+				return
+			}
+			continue
 		}
 		if deadAudio {
-			rt.restart("audio timeout")
-			return
+			if rt.restart("audio timeout") {
+				return
+			}
+			continue
 		}
 		if staleVideo {
-			rt.requestStreams(false, true)
+			rt.requestStreams(false)
+		} else if refreshVideo {
+			rt.requestStreams(false)
 		} else if staleAudio {
 			rt.requestStreams(false)
-		}
-		if audioSilent {
-			silence := make([]byte, audioSampleRate*audioChannels*audioBytesPerSample/2)
-			for _, c := range audioClients {
-				sendDropOld(c.ch, silence)
-			}
 		}
 	}
 }
@@ -1947,7 +1964,7 @@ func (rt *CameraRuntime) requestStreams(forceVideo bool, videoOnly ...bool) {
 	pp := rt.pppp
 	now := time.Now()
 	wantsVideo := forceVideo || len(rt.videoClients) > 0 || len(rt.latestFrame) == 0 || now.Sub(rt.lastSnapshotDemand) < 10*time.Second
-	wantsAudio := len(rt.audioClients) > 0
+	wantsAudio := len(rt.audioClients) > 0 || (rt.cfg.avStream() && wantsVideo)
 	skipAudio := len(videoOnly) > 0 && videoOnly[0]
 	sendVideo := wantsVideo && (forceVideo || rt.lastVideoRequest.IsZero() || now.Sub(rt.lastVideoRequest) >= streamRequestWindow)
 	sendAudio := wantsAudio && !skipAudio && (forceVideo || rt.lastAudioRequest.IsZero() || now.Sub(rt.lastAudioRequest) >= streamRequestWindow)
@@ -1963,7 +1980,7 @@ func (rt *CameraRuntime) requestStreams(forceVideo bool, videoOnly ...bool) {
 	}
 	sentVideo := false
 	if sendVideo {
-		if err := pp.SendCommand(111, "stream", map[string]any{"video": 1}); err == nil {
+		if err := pp.SendCommand(111, "stream", map[string]any{"video": rt.cfg.videoMode()}); err == nil {
 			sentVideo = true
 			rt.mu.Lock()
 			rt.streamMode = "video"
@@ -2069,6 +2086,7 @@ func (rt *CameraRuntime) Status(base string) map[string]any {
 		"videoFps":              videoMetric.Rate,
 		"audioPacketsPerSecond": audioMetric.Rate,
 		"videoKbps":             videoMetric.Kbps,
+		"videoMode":             rt.cfg.videoMode(),
 		"audioKbps":             audioMetric.Kbps,
 		"videoDemand":           videoDemand,
 		"audioDemand":           audioDemand,
@@ -2102,6 +2120,9 @@ func (rt *CameraRuntime) healthLocked() (string, string) {
 		if !rt.startedAt.IsZero() && rt.restartCount == 0 && time.Since(rt.startedAt) <= 20*time.Second {
 			return "connecting", "connecting"
 		}
+		if !rt.lastVideoAt.IsZero() && time.Since(rt.lastVideoAt) <= staleTrafficWindow {
+			return "stale", "reconnecting"
+		}
 		return "offline", "offline"
 	}
 	if rt.lastTraffic.IsZero() {
@@ -2114,6 +2135,7 @@ func (rt *CameraRuntime) healthLocked() (string, string) {
 	}
 
 	videoDemand := len(rt.videoClients) > 0 || now.Sub(rt.lastSnapshotDemand) < 10*time.Second
+	videoFresh := false
 	if videoDemand {
 		if rt.lastVideoAt.IsZero() {
 			if now.Sub(rt.connectedAt) <= mediaRestartWindow {
@@ -2127,17 +2149,24 @@ func (rt *CameraRuntime) healthLocked() (string, string) {
 			}
 			return "stale", "video stale"
 		}
+		videoFresh = true
 	}
 
 	audioDemand := len(rt.audioClients) > 0
 	if audioDemand {
 		if rt.lastAudioAt.IsZero() {
+			if videoFresh {
+				return "online", "audio stale"
+			}
 			if now.Sub(rt.connectedAt) <= mediaRestartWindow {
 				return "connecting", "waiting for audio"
 			}
 			return "stale", "audio stale"
 		}
 		if audioAge := now.Sub(rt.lastAudioAt); audioAge > audioStaleWindow {
+			if videoFresh {
+				return "online", "audio stale"
+			}
 			if audioAge > staleTrafficWindow {
 				return "offline", "audio offline"
 			}
@@ -2173,6 +2202,11 @@ func (rt *CameraRuntime) ServeVideo(w http.ResponseWriter, r *http.Request) {
 	rt.requestStreams(false)
 	idle := time.NewTimer(videoClientIdle)
 	defer idle.Stop()
+	hold := time.NewTicker(videoHoldInterval)
+	defer hold.Stop()
+	var lastSent []byte
+	var lastRealFrameAt time.Time
+	var lastWriteAt time.Time
 	for {
 		select {
 		case <-r.Context().Done():
@@ -2180,14 +2214,25 @@ func (rt *CameraRuntime) ServeVideo(w http.ResponseWriter, r *http.Request) {
 		case <-idle.C:
 			return
 		case frame := <-client.ch:
+			now := time.Now()
+			lastSent = append(lastSent[:0], frame...)
+			lastRealFrameAt = now
+			lastWriteAt = now
 			resetTimer(idle, videoClientIdle)
-			if _, err := fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frame)); err != nil {
+			if err := writeMJPEGFrame(w, frame); err != nil {
 				return
 			}
-			if _, err := w.Write(frame); err != nil {
-				return
+			if flusher != nil {
+				flusher.Flush()
 			}
-			if _, err := w.Write([]byte("\r\n")); err != nil {
+		case <-hold.C:
+			now := time.Now()
+			if len(lastSent) == 0 || now.Sub(lastRealFrameAt) > videoHoldWindow || now.Sub(lastWriteAt) < videoHoldInterval {
+				continue
+			}
+			lastWriteAt = now
+			resetTimer(idle, videoClientIdle)
+			if err := writeMJPEGFrame(w, lastSent); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -2195,6 +2240,19 @@ func (rt *CameraRuntime) ServeVideo(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+func writeMJPEGFrame(w io.Writer, frame []byte) error {
+	if _, err := fmt.Fprintf(w, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frame)); err != nil {
+		return err
+	}
+	if _, err := w.Write(frame); err != nil {
+		return err
+	}
+	if _, err := w.Write([]byte("\r\n")); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (rt *CameraRuntime) ServeAudio(w http.ResponseWriter, r *http.Request, wav bool) {
@@ -2455,12 +2513,24 @@ func (p *PPPP) handleVideo(pkt Packet) []byte {
 	isStart := bytes.HasPrefix(data, marker)
 	p.videoMu.Lock()
 	defer p.videoMu.Unlock()
+	var previous []byte
 	if isStart {
+		if p.videoFrame != nil {
+			previous = buildVideoFrame(p.videoFrame, true)
+		}
 		if len(data) < 0x20 {
+			p.videoFrame = nil
+			if len(previous) > 0 {
+				return previous
+			}
 			return nil
 		}
 		expected := int(binary.LittleEndian.Uint32(data[16:20]))
 		if expected <= 0 || expected > maxFrame {
+			p.videoFrame = nil
+			if len(previous) > 0 {
+				return previous
+			}
 			return nil
 		}
 		data = data[0x20:]
@@ -2471,12 +2541,19 @@ func (p *PPPP) handleVideo(pkt Packet) []byte {
 		}
 	}
 	if p.videoFrame == nil {
+		if len(previous) > 0 {
+			return previous
+		}
 		return nil
 	}
 	vf := p.videoFrame
 	slot := indexDistance(vf.startIndex, pkt.Index)
 	if slot > 128 {
+		previous = buildVideoFrame(vf, true)
 		p.videoFrame = nil
+		if len(previous) > 0 {
+			return previous
+		}
 		return nil
 	}
 	if _, ok := vf.chunks[slot]; !ok {
@@ -2486,9 +2563,18 @@ func (p *PPPP) handleVideo(pkt Packet) []byte {
 			vf.maxSlot = slot
 		}
 	}
-	if vf.receivedLength < vf.expectedLength {
+	if len(previous) > 0 {
+		return previous
+	}
+	out := buildVideoFrame(vf, false)
+	if len(out) == 0 {
 		return nil
 	}
+	p.videoFrame = nil
+	return out
+}
+
+func buildVideoFrame(vf *videoFrame, allowBoundaryComplete bool) []byte {
 	var out []byte
 	total := 0
 	for i := 0; i <= vf.maxSlot; i++ {
@@ -2502,11 +2588,33 @@ func (p *PPPP) handleVideo(pkt Packet) []byte {
 			break
 		}
 	}
-	if len(out) > vf.expectedLength {
+	if len(out) >= vf.expectedLength {
 		out = out[:vf.expectedLength]
+		if len(out) > 0 {
+			return out
+		}
 	}
-	p.videoFrame = nil
-	return out
+	if !allowBoundaryComplete {
+		return nil
+	}
+	return trimCompleteJPEG(out)
+}
+
+func trimCompleteJPEG(in []byte) []byte {
+	soi := bytes.Index(in, []byte{0xff, 0xd8})
+	if soi < 0 {
+		return nil
+	}
+	eoi := -1
+	for i := soi + 2; i+1 < len(in); i++ {
+		if in[i] == 0xff && in[i+1] == 0xd9 {
+			eoi = i + 2
+		}
+	}
+	if eoi <= soi {
+		return nil
+	}
+	return append([]byte(nil), in[soi:eoi]...)
 }
 
 func (p *PPPP) SendCommand(cmd int, pro string, args map[string]any) error {
