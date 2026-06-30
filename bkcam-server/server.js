@@ -117,6 +117,15 @@ function asInt(value, fallback) {
   return Number.isFinite(n) ? Math.round(n) : fallback
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function defaultLanDiscovery() {
+  const match = String(PUBLIC_HOST || '').match(/^(\d+)\.(\d+)\.(\d+)\.\d+$/)
+  return match ? `${match[1]}.${match[2]}.${match[3]}.255` : '255.255.255.255'
+}
+
 function normalizeCamera(input, existing = null) {
   const camera = existing ? { ...existing } : {}
   const id = asString(input.id, camera.id)
@@ -140,6 +149,24 @@ function normalizeCamera(input, existing = null) {
     throw Object.assign(new Error('camera ip or discovery address is required'), { statusCode: 400 })
   }
   return camera
+}
+
+function storeCamera(camera) {
+  const idx = cameraIndex(camera.id)
+  if (idx === -1) config.cameras.push(camera)
+  else config.cameras[idx] = camera
+  saveConfig()
+  return upsertRuntime(camera)
+}
+
+async function waitForSession(runtime, timeoutMs = 18000) {
+  runtime.start()
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (runtime.connectedAt) return true
+    await sleep(250)
+  }
+  return Boolean(runtime.connectedAt)
 }
 
 function publicCameraConfig(camera) {
@@ -688,7 +715,8 @@ function renderCameraConfigForm(camera) {
     </form>`
 }
 
-function renderWizard(cameraOptions) {
+function renderWizard() {
+  const lanDiscovery = defaultLanDiscovery()
   return `
     <section class="wizard setup-wizard">
       <header class="section-head">
@@ -700,42 +728,109 @@ function renderWizard(cameraOptions) {
       <div class="steps">
         <section class="step">
           <strong>1. Prepare</strong>
-          <p>Keep this server running. If the camera is brand new, connect this computer to the camera AP, then open <code>http://127.0.0.1:8088/setup</code>. No internet is required.</p>
+          <p>Connect this computer to the camera AP or to the same LAN as the camera. Keep this page open from the local server; no internet is required.</p>
         </section>
         <section class="step">
-          <strong>2. Add the temporary camera link</strong>
-          <p>Use broadcast discovery if you do not know the AP-side camera IP yet. For DID prefix <code>EEE</code>, PSK is usually <code>SHIX</code>.</p>
-          <form data-add-camera class="config-form">
+          <strong>2. Write Wi-Fi and save camera</strong>
+          <p>The server first reaches the camera at its current address, sends Wi-Fi settings, then stores the LAN address in the local config. If the final IP is unknown, leave it empty and use LAN broadcast discovery.</p>
+          <form data-provision-camera class="config-form">
             <label><span>ID</span><input name="id" required pattern="[A-Za-z0-9_-]+" autocomplete="off" placeholder="a9_front"></label>
             <label><span>Name</span><input name="name" autocomplete="off" placeholder="Front door"></label>
-            <label><span>Camera IP</span><input name="ip" placeholder="optional" inputmode="numeric" autocomplete="off"></label>
-            <label><span>Discovery</span><input name="discovery" placeholder="255.255.255.255" inputmode="numeric" autocomplete="off"></label>
+            <label><span>Current IP</span><input name="setupIp" placeholder="192.168.4.1" inputmode="numeric" autocomplete="off"></label>
+            <label><span>Current discovery</span><input name="setupDiscovery" placeholder="255.255.255.255" inputmode="numeric" autocomplete="off"></label>
+            <label><span>Target SSID</span><input name="ssid" autocomplete="off"></label>
+            <label><span>Target password</span><input name="wifiPassword" type="password" autocomplete="new-password"></label>
+            <label><span>Final LAN IP</span><input name="finalIp" placeholder="optional" inputmode="numeric" autocomplete="off"></label>
+            <label><span>Final discovery</span><input name="finalDiscovery" placeholder="${escapeHtml(lanDiscovery)}" inputmode="numeric" autocomplete="off"></label>
             <label><span>PSK</span><input name="psk" value="SHIX" autocomplete="off"></label>
             <label><span>User</span><input name="username" value="admin" autocomplete="off"></label>
-            <label><span>Password</span><input name="password" type="password" value="6666" autocomplete="new-password"></label>
+            <label><span>Camera password</span><input name="password" type="password" value="6666" autocomplete="new-password"></label>
             <label><span>ACK</span><input name="ackRepeats" type="number" min="1" max="9" value="3"></label>
-            <button type="submit">Add camera</button>
-            <output></output>
-          </form>
-        </section>
-        <section class="step">
-          <strong>3. Send your Wi-Fi settings to the camera</strong>
-          <p>The password is sent only to the selected camera. The camera stores it and usually needs a reboot.</p>
-          <form data-wizard-wifi class="config-form compact">
-            <label><span>Camera</span><select name="id">${cameraOptions}</select></label>
-            <label><span>Target SSID</span><input name="ssid" autocomplete="off"></label>
-            <label><span>Target password</span><input name="password" type="password" autocomplete="new-password"></label>
             <label class="check"><input name="reboot" type="checkbox" checked><span>Reboot</span></label>
-            <button type="submit">Send Wi-Fi</button>
+            <button type="submit">Write and save</button>
             <output></output>
           </form>
         </section>
         <section class="step">
-          <strong>4. Finish on your normal LAN</strong>
-          <p>Reconnect this computer to the target Wi-Fi, wait for the camera to get DHCP, then update its IP or discovery address in Settings if needed.</p>
+          <strong>3. Move back to LAN</strong>
+          <p>After reboot, connect this computer back to the target Wi-Fi. The dashboard will use the saved LAN address for the stream.</p>
+        </section>
+        <section class="step">
+          <strong>4. Existing cameras</strong>
+          <p>For a camera already saved in the config, open its card and use Settings or Maintenance. This wizard is only for initial provisioning.</p>
         </section>
       </div>
     </section>`
+}
+
+async function provisionCamera(body, req) {
+  const id = asString(body.id)
+  if (!id) throw Object.assign(new Error('camera id is required'), { statusCode: 400 })
+  if (!CAMERA_ID_RE.test(id)) throw Object.assign(new Error(`camera id must match ${CAMERA_ID_RE}`), { statusCode: 400 })
+
+  const ssid = asString(body.ssid)
+  const wifiPassword = body.wifiPassword === undefined ? '' : String(body.wifiPassword)
+  if (!ssid) throw Object.assign(new Error('target SSID is required'), { statusCode: 400 })
+  if (!wifiPassword) throw Object.assign(new Error('target Wi-Fi password is required'), { statusCode: 400 })
+
+  const existingIdx = cameraIndex(id)
+  const existing = existingIdx === -1 ? null : config.cameras[existingIdx]
+  const setupIp = asString(body.setupIp)
+  const setupDiscovery = asString(body.setupDiscovery, setupIp || '255.255.255.255')
+  const finalIp = asString(body.finalIp)
+  const finalDiscoveryInput = asString(body.finalDiscovery)
+  const finalDiscovery = finalDiscoveryInput || finalIp || defaultLanDiscovery()
+
+  const setupCamera = normalizeCamera({
+    id,
+    name: asString(body.name, existing?.name || id),
+    ip: setupIp,
+    discovery: setupDiscovery,
+    localAddress: asString(body.localAddress, existing?.localAddress || ''),
+    psk: asString(body.psk, existing?.psk || 'SHIX'),
+    username: asString(body.username, existing?.username || 'admin'),
+    password: body.password !== undefined && body.password !== '' ? body.password : (existing?.password || '6666'),
+    width: asInt(body.width, existing?.width || 640),
+    height: asInt(body.height, existing?.height || 480),
+    ackRepeats: asInt(body.ackRepeats, existing?.ackRepeats || 3),
+    enabled: true,
+    verbose: asBool(body.verbose, Boolean(existing?.verbose)),
+  }, existing)
+
+  const runtime = upsertRuntime(setupCamera)
+  const connected = await waitForSession(runtime)
+  if (!connected) {
+    if (existing) upsertRuntime(existing)
+    else removeRuntime(id)
+    throw Object.assign(new Error(`camera did not answer at ${setupCamera.discovery || setupCamera.ip}`), { statusCode: 409 })
+  }
+
+  const result = runtime.setWifi(ssid, wifiPassword)
+  if (!result.ok) {
+    if (existing) upsertRuntime(existing)
+    else removeRuntime(id)
+    throw Object.assign(new Error(result.error || 'failed to send Wi-Fi settings'), { statusCode: 409 })
+  }
+
+  if (asBool(body.reboot, true)) {
+    await sleep(1200)
+    runtime.safeCall('sendCMDReboot')
+  }
+
+  const finalCamera = normalizeCamera({
+    ...setupCamera,
+    ip: finalIp,
+    discovery: finalDiscovery,
+    enabled: true,
+  }, setupCamera)
+  const finalRuntime = storeCamera(finalCamera)
+
+  return {
+    ok: true,
+    message: 'Wi-Fi sent and camera config saved',
+    camera: publicCameraConfig(finalCamera),
+    status: finalRuntime.status(baseUrl(req)),
+  }
 }
 
 async function handleApi(req, res, pathname) {
@@ -755,6 +850,12 @@ async function handleApi(req, res, pathname) {
       server: { host: PUBLIC_HOST, port: PORT, bind: BIND },
       cameras: config.cameras.map(publicCameraConfig),
     })
+    return true
+  }
+
+  if (pathname === '/api/setup/provision' && method === 'POST') {
+    const body = await readJsonBody(req)
+    writeJson(res, 200, await provisionCamera(body, req))
     return true
   }
 
@@ -874,11 +975,8 @@ function renderPage(req, cameraId = null, mode = 'dashboard') {
   const statuses = allStatuses(req)
   const cameras = isSetup ? [] : (cameraId ? statuses.filter((c) => c.id === cameraId) : statuses)
   const configs = new Map(config.cameras.map((camera) => [camera.id, publicCameraConfig(camera)]))
-  const cameraOptions = config.cameras.map((camera) => `
-    <option value="${escapeHtml(camera.id)}">${escapeHtml(camera.name || camera.id)}</option>
-  `).join('')
   const manager = isSetup
-    ? renderWizard(cameraOptions || '<option value="">No cameras</option>')
+    ? renderWizard()
     : (cameraId ? '' : `
       <section class="overview-head">
         <div>
@@ -1168,6 +1266,12 @@ function renderPage(req, cameraId = null, mode = 'dashboard') {
           ev.preventDefault()
           await sendJson('/api/cameras', 'POST', readForm(form))
           location.reload()
+        } else if (form.dataset.provisionCamera !== undefined) {
+          ev.preventDefault()
+          if (out) out.textContent = 'Writing...'
+          await sendJson('/api/setup/provision', 'POST', readForm(form))
+          if (out) out.textContent = 'Saved'
+          setTimeout(() => { location.href = '/' }, 700)
         } else if (form.dataset.updateCamera) {
           ev.preventDefault()
           await sendJson('/api/cameras/' + encodeURIComponent(form.dataset.updateCamera), 'PATCH', readForm(form))

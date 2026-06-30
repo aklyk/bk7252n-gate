@@ -8,7 +8,7 @@
 - Компактные snapshot-превью на главной странице, без множества долгих MJPEG-соединений.
 - Пошаговый wizard отдельно: `/setup`.
 - Live MJPEG на странице конкретной камеры: `/cam/<id>`.
-- Offline setup wizard для режима, когда ноутбук подключен к AP камеры и интернета нет.
+- Offline setup wizard по Wi-Fi/PPPP для режима, когда ноутбук подключен к AP камеры и интернета нет.
 - MJPEG видео: `/cam/<id>/video.mjpg`
 - WAV/PCM аудио: `/cam/<id>/audio.wav`
 - Raw PCM аудио для браузерного Web Audio: `/cam/<id>/audio.raw`
@@ -60,6 +60,7 @@ http://192.168.1.179:8088/
 ## API
 
 ```text
+POST   /api/setup/provision
 GET    /api/cameras
 POST   /api/cameras
 GET    /api/cameras/<id>
@@ -72,6 +73,8 @@ POST   /api/cameras/<id>/params
 ```
 
 Пароль камеры не возвращается через API; наружу отдаётся только `hasPassword`.
+
+`/api/setup/provision` делает первичную настройку без UART: временно подключается к камере по её текущему Wi-Fi/AP адресу, отправляет `set_wifi`, затем сохраняет финальные `ip/discovery` в `config.json`.
 
 Пример добавления:
 
@@ -87,6 +90,14 @@ curl -X POST http://127.0.0.1:8088/api/cameras \
 curl -X POST http://127.0.0.1:8088/api/cameras/a9_front/wifi \
   -H 'content-type: application/json' \
   --data '{"ssid":"<SSID>","password":"<PASSWORD>","reboot":true}'
+```
+
+Пример первичной настройки через wizard API:
+
+```bash
+curl -X POST http://127.0.0.1:8088/api/setup/provision \
+  -H 'content-type: application/json' \
+  --data '{"id":"doorcam","name":"Doorcam","setupIp":"192.168.4.1","setupDiscovery":"255.255.255.255","ssid":"<SSID>","wifiPassword":"<PASSWORD>","finalIp":"192.168.1.162","finalDiscovery":"192.168.1.162","psk":"SHIX","username":"admin","password":"6666","reboot":true}'
 ```
 
 ## Safari/audio

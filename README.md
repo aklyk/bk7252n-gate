@@ -48,6 +48,7 @@ Useful endpoints:
 Camera management API:
 
 ```text
+POST   /api/setup/provision
 GET    /api/cameras
 POST   /api/cameras
 GET    /api/cameras/<id>
@@ -84,9 +85,9 @@ The generated snippet uses go2rtc/ffmpeg to restream MJPEG as H.264 RTSP. Audio 
 
 ## Camera Setup
 
-If a camera is already on Wi-Fi, no UART is needed for streaming. If you need to configure Wi-Fi without the vendor app, open `/setup`; the wizard still works when your computer is connected to the camera AP and has no internet.
+If a camera is already on Wi-Fi, open `/setup` or add it from the API. If a new camera exposes its own AP, connect this computer to that AP, open `/setup`, enter the camera's current AP address/discovery, target Wi-Fi credentials and the final LAN address if you already know it. The wizard sends `set_wifi` over the camera's PPPP Wi-Fi session and saves the matching local camera config. No internet is required.
 
-UART provisioning remains the most reliable known fallback:
+UART is not part of the wizard. It is only a manual development/recovery fallback:
 
 ```text
 setenv workmode sta
