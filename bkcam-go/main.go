@@ -737,6 +737,11 @@ var uiText = map[string]map[string]string{
 		"reconnectSession": "Переподключить сессию", "refreshInfo": "Прочитать параметры", "rebootHardware": "Перезагрузить камеру", "rebootConfirm": "Перезагрузить железо камеры?",
 		"wifiSSID": "Wi-Fi SSID", "wifiPassword": "Пароль Wi-Fi", "reboot": "Перезагрузка", "setWifi": "Записать Wi-Fi",
 		"saved": "Сохранено", "sent": "Отправлено", "writing": "Запись...", "read": "Прочитано", "apply": "Применить", "readFromCamera": "Прочитать из камеры",
+		"autoRead": "Считываю настройки...", "autoReadOk": "Настройки считаны", "autoReadTimeout": "Камера не ответила на чтение",
+		"cameraPreset": "Пресет", "presetStable320": "Стабильный 320x240", "presetQuality640": "Качество 640x480", "presetStop": "Остановить видео", "presetCustom": "Не менять автоматически",
+		"basicDeviceHelp": "Для обычной работы выберите пресет и нужные галочки. Этого достаточно для Safari, dashboard и Frigate.",
+		"localOnlyMode":   "Локальный режим: отключить push фото/видео", "localOnlyHint": "Отключает отправку фото/видео в push-сервис камеры. WAN все равно лучше резать на роутере.",
+		"enableAudioNow": "Запустить звук сейчас", "disableDetectors": "Отключить детекцию движения и звука", "advancedSettings": "Расширенные параметры", "expertSettings": "Экспертные параметры", "rawReadback": "Сырой ответ прошивки",
 		"leave": "Не менять", "streamProfile": "Поток", "streamStop": "Остановить видео", "streamQVGA": "320x240, легче для Wi-Fi", "streamVGA": "640x480, больше нагрузка",
 		"audioStream": "Аудиопоток", "audioOn": "Включить", "audioOff": "Выключить", "bitrate": "Битрейт", "brightness": "Яркость", "contrast": "Контраст",
 		"irCut": "IR-cut", "lamp": "Подсветка", "antiFlicker": "Anti-flicker", "rotateMirror": "Поворот/зеркало",
@@ -765,6 +770,11 @@ var uiText = map[string]map[string]string{
 		"reconnectSession": "Reconnect camera session", "refreshInfo": "Refresh camera info", "rebootHardware": "Restart camera hardware", "rebootConfirm": "Restart camera hardware?",
 		"wifiSSID": "Wi-Fi SSID", "wifiPassword": "Wi-Fi password", "reboot": "Reboot", "setWifi": "Set Wi-Fi",
 		"saved": "Saved", "sent": "Sent", "writing": "Writing...", "read": "Read", "apply": "Apply", "readFromCamera": "Read from camera",
+		"autoRead": "Reading settings...", "autoReadOk": "Settings read", "autoReadTimeout": "Camera did not answer readback",
+		"cameraPreset": "Preset", "presetStable320": "Stable 320x240", "presetQuality640": "Quality 640x480", "presetStop": "Stop video", "presetCustom": "Do not auto-change",
+		"basicDeviceHelp": "For normal use, choose a preset and the needed checkboxes. This is enough for Safari, dashboard and Frigate.",
+		"localOnlyMode":   "Local mode: disable push photos/videos", "localOnlyHint": "Disables photo/video upload to the camera push service. Router WAN blocking is still recommended.",
+		"enableAudioNow": "Start audio now", "disableDetectors": "Disable motion and sound detection", "advancedSettings": "Advanced settings", "expertSettings": "Expert settings", "rawReadback": "Raw firmware response",
 		"leave": "Leave unchanged", "streamProfile": "Stream", "streamStop": "Stop video", "streamQVGA": "320x240, lighter on Wi-Fi", "streamVGA": "640x480, higher load",
 		"audioStream": "Audio stream", "audioOn": "On", "audioOff": "Off", "bitrate": "Bitrate", "brightness": "Brightness", "contrast": "Contrast",
 		"irCut": "IR-cut", "lamp": "Light", "antiFlicker": "Anti-flicker", "rotateMirror": "Rotate/mirror",
@@ -1615,6 +1625,9 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       sent: ` + strconv.Quote(t("sent")) + `,
       writing: ` + strconv.Quote(t("writing")) + `,
       read: ` + strconv.Quote(t("read")) + `,
+      autoRead: ` + strconv.Quote(t("autoRead")) + `,
+      autoReadOk: ` + strconv.Quote(t("autoReadOk")) + `,
+      autoReadTimeout: ` + strconv.Quote(t("autoReadTimeout")) + `,
       sound: ` + strconv.Quote(t("sound")) + `,
       stop: ` + strconv.Quote(t("stop")) + `
     }
@@ -1752,10 +1765,80 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       const data = {}
       for (const el of Array.from(form.elements)) {
         if (!el.name) continue
+        let section = el.closest('details.form-section')
+        let skip = false
+        while (section) {
+          if (!section.open) {
+            skip = true
+            break
+          }
+          section = section.parentElement ? section.parentElement.closest('details.form-section') : null
+        }
+        if (skip) continue
         if (el.type === 'checkbox') data[el.name] = el.checked
         else if (el.value !== '') data[el.name] = el.value
       }
       return data
+    }
+
+    function commandData(readback, name) {
+      const item = (readback.commands || []).find((cmd) => cmd.name === name)
+      return item && item.result && item.result.data ? item.result.data : null
+    }
+
+    function setFormValue(form, name, value) {
+      if (value === undefined || value === null) return
+      const el = form.elements[name]
+      if (!el) return
+      if (el.type === 'checkbox') el.checked = value === true || value === 1 || value === '1'
+      else el.value = String(value)
+    }
+
+    function applyDeviceReadback(form, readback) {
+      const parms = commandData(readback, 'get_parms') || {}
+      const alarm = commandData(readback, 'get_cyalarm') || {}
+      const sys = commandData(readback, 'get_sysparms') || {}
+
+      if (parms.stream === 2) setFormValue(form, 'preset', 'stable320')
+      else if (parms.stream === 1) setFormValue(form, 'preset', 'quality640')
+
+      setFormValue(form, 'bitrate', parms.rate_bit)
+      setFormValue(form, 'brightness', parms.bright)
+      setFormValue(form, 'contrast', parms.contrast)
+      setFormValue(form, 'irCut', parms.icut)
+      setFormValue(form, 'lamp', parms.lamp)
+      setFormValue(form, 'antiFlicker', parms.anti_flicker)
+      setFormValue(form, 'rotateMirror', parms.rotmir)
+
+      setFormValue(form, 'motionDetect', alarm.motionDetect)
+      setFormValue(form, 'motionDelay', alarm.motionDelay)
+      setFormValue(form, 'audioDetect', alarm.audioDetect)
+      setFormValue(form, 'audioDelay', alarm.audioDelay)
+      if (alarm.motionDetect === 0 && alarm.audioDetect === 0) setFormValue(form, 'disableDetectors', true)
+
+      setFormValue(form, 'sleepTime', sys.sleep_time)
+      setFormValue(form, 'offlineTime', sys.offline_time)
+      setFormValue(form, 'limitPush', sys.limit_push)
+      setFormValue(form, 'environment', sys.environment)
+    }
+
+    async function autoReadDevice(form, force) {
+      if (!form || !form.dataset.deviceCamera) return
+      if (!force && (form.dataset.readState === 'loading' || form.dataset.readState === 'done')) return
+      const out = form.querySelector('output')
+      const pre = form.querySelector('.device-output')
+      form.dataset.readState = 'loading'
+      if (out) out.textContent = UI.autoRead
+      try {
+        const data = await sendJson('/api/cameras/' + encodeURIComponent(form.dataset.deviceCamera) + '/device-refresh', 'POST')
+        form.dataset.readState = data.ok ? 'done' : 'failed'
+        applyDeviceReadback(form, data)
+        if (out) out.textContent = data.ok ? UI.autoReadOk : UI.autoReadTimeout
+        if (pre) pre.textContent = JSON.stringify(data, null, 2)
+      } catch (err) {
+        form.dataset.readState = 'failed'
+        if (out) out.textContent = err.message
+      }
     }
 
     document.addEventListener('submit', async (ev) => {
@@ -1800,29 +1883,6 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
         return
       }
 
-      const readId = ev.target && ev.target.dataset && ev.target.dataset.deviceRead
-      if (readId) {
-        ev.preventDefault()
-        const form = ev.target.closest('form')
-        const out = form && form.querySelector('output')
-        const pre = form && form.querySelector('.device-output')
-		  const old = ev.target.textContent
-		  try {
-		    ev.target.textContent = '...'
-		    const data = await sendJson('/api/cameras/' + encodeURIComponent(readId) + '/device-refresh', 'POST')
-		    if (out) out.textContent = data.ok ? UI.read : 'timeout'
-		    if (pre) {
-		      pre.hidden = false
-		      pre.textContent = JSON.stringify(data, null, 2)
-          }
-        } catch (err) {
-          if (out) out.textContent = err.message
-        } finally {
-          ev.target.textContent = old
-        }
-        return
-      }
-
       const action = ev.target && ev.target.dataset && ev.target.dataset.command
       const id = ev.target && ev.target.dataset && ev.target.dataset.id
       if (!action || !id) return
@@ -1837,6 +1897,16 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
         ev.target.textContent = old
       }
     })
+
+    document.addEventListener('toggle', (ev) => {
+      if (!ev.target.open) return
+      const form = ev.target.querySelector && ev.target.querySelector('form[data-device-camera]')
+      if (form) autoReadDevice(form, false)
+    }, true)
+
+    for (const form of document.querySelectorAll('details[open] form[data-device-camera]')) {
+      autoReadDevice(form, false)
+    }
 
     async function poll() {
       try {
@@ -1926,25 +1996,34 @@ func renderDeviceConfigForm(id, lang string) string {
 	t := func(key string) string { return tr(lang, key) }
 	leave := t("leave")
 	return `<form data-device-camera="` + htmlValue(id) + `" class="config-form device-form">
-      <p class="camera-device-help">` + htmlValue(t("deviceConfigHelp")) + `</p>
-      <p class="camera-device-help">` + htmlValue(t("deviceConfigWarn")) + `</p>
-      ` + renderSelect("streamMode", t("streamProfile"), [][2]string{
+      <p class="camera-device-help">` + htmlValue(t("basicDeviceHelp")) + `</p>
+      ` + renderSelect("preset", t("cameraPreset"), [][2]string{
+		{"stable320", t("presetStable320")},
+		{"quality640", t("presetQuality640")},
+		{"stop", t("presetStop")},
+		{"custom", t("presetCustom")},
+	}) + `
+      <label class="check"><input name="disablePushUpload" type="checkbox" checked><span>` + htmlValue(t("localOnlyMode")) + `</span></label>
+      <label class="check"><input name="enableAudioNow" type="checkbox"><span>` + htmlValue(t("enableAudioNow")) + `</span></label>
+      <label class="check"><input name="disableDetectors" type="checkbox"><span>` + htmlValue(t("disableDetectors")) + `</span></label>
+      <button type="submit">` + htmlValue(t("apply")) + `</button>
+      <output></output>
+      <p class="camera-device-help">` + htmlValue(t("localOnlyHint")) + `</p>
+      <details class="form-section">
+        <summary>` + htmlValue(t("advancedSettings")) + `</summary>
+        <p class="camera-device-help">` + htmlValue(t("deviceConfigWarn")) + `</p>
+        <div class="config-form">
+          ` + renderSelect("streamMode", t("streamProfile"), [][2]string{
 		{"", leave},
 		{"qvga", t("streamQVGA")},
 		{"vga", t("streamVGA")},
 		{"stop", t("streamStop")},
 	}) + `
-      ` + renderSelect("audioStream", t("audioStream"), [][2]string{
+          ` + renderSelect("audioStream", t("audioStream"), [][2]string{
 		{"", leave},
 		{"on", t("audioOn")},
 		{"off", t("audioOff")},
 	}) + `
-      <button type="button" data-device-read="` + htmlValue(id) + `">` + htmlValue(t("readFromCamera")) + `</button>
-      <button type="submit">` + htmlValue(t("apply")) + `</button>
-      <output></output>
-      <details class="form-section" open>
-        <summary>` + htmlValue(t("qualityGroup")) + `</summary>
-        <div class="config-form">
           ` + renderInput("bitrate", t("bitrate"), "", `type="number" min="1" max="64" placeholder="26"`) + `
           ` + renderInput("brightness", t("brightness"), "", `type="number" min="0" max="6" placeholder="4"`) + `
           ` + renderInput("contrast", t("contrast"), "", `type="number" min="0" max="6" placeholder="2"`) + `
@@ -1954,29 +2033,26 @@ func renderDeviceConfigForm(id, lang string) string {
           ` + renderSelect("rotateMirror", t("rotateMirror"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}, {"2", "2"}, {"3", "3"}}) + `
           <label class="check"><input name="resetImage" type="checkbox"><span>` + htmlValue(t("resetImage")) + `</span></label>
         </div>
+        <details class="form-section">
+          <summary>` + htmlValue(t("expertSettings")) + `</summary>
+          <p class="camera-device-help">` + htmlValue(t("deviceConfigHelp")) + `</p>
+          <div class="config-form">
+            ` + renderSelect("motionDetect", t("motionDetect"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}}) + `
+            ` + renderInput("motionDelay", t("motionDelay"), "", `type="number" min="1" max="600"`) + `
+            ` + renderSelect("audioDetect", t("audioDetect"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}}) + `
+            ` + renderInput("audioDelay", t("audioDelay"), "", `type="number" min="1" max="600"`) + `
+            ` + renderInput("sleepTime", t("sleepTime"), "", `type="number" min="1" max="86400"`) + `
+            ` + renderInput("offlineTime", t("offlineTime"), "", `type="number" min="1" max="3600"`) + `
+            ` + renderInput("limitPush", t("limitPush"), "", `type="number" min="1" max="100000"`) + `
+            ` + renderSelect("environment", t("environment"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}, {"2", "2"}, {"3", "3"}}) + `
+          </div>
+          <details class="form-section">
+            <summary>` + htmlValue(t("rawReadback")) + `</summary>
+            <p class="camera-device-help">` + htmlValue(t("deviceReadHint")) + `</p>
+            <pre class="device-output"></pre>
+          </details>
+        </details>
       </details>
-      <details class="form-section">
-        <summary>` + htmlValue(t("alarmGroup")) + `</summary>
-        <div class="config-form">
-          ` + renderSelect("motionDetect", t("motionDetect"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}}) + `
-          ` + renderInput("motionDelay", t("motionDelay"), "", `type="number" min="1" max="600"`) + `
-          ` + renderSelect("audioDetect", t("audioDetect"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}}) + `
-          ` + renderInput("audioDelay", t("audioDelay"), "", `type="number" min="1" max="600"`) + `
-        </div>
-      </details>
-      <details class="form-section">
-        <summary>` + htmlValue(t("systemGroup")) + `</summary>
-        <p class="camera-device-help">` + htmlValue(t("cloudHardeningHelp")) + `</p>
-        <div class="config-form">
-          ` + renderInput("sleepTime", t("sleepTime"), "", `type="number" min="1" max="86400"`) + `
-          ` + renderInput("offlineTime", t("offlineTime"), "", `type="number" min="1" max="3600"`) + `
-          ` + renderInput("limitPush", t("limitPush"), "", `type="number" min="1" max="100000"`) + `
-          ` + renderSelect("environment", t("environment"), [][2]string{{"", leave}, {"0", "0"}, {"1", "1"}, {"2", "2"}, {"3", "3"}}) + `
-          <label class="check"><input name="disablePushUpload" type="checkbox"><span>` + htmlValue(t("cloudHardening")) + `</span></label>
-        </div>
-      </details>
-      <p class="camera-device-help">` + htmlValue(t("deviceReadHint")) + `</p>
-      <pre class="device-output" hidden></pre>
     </form>`
 }
 
@@ -2524,6 +2600,23 @@ func (rt *CameraRuntime) ApplyDeviceConfig(input map[string]any) (map[string]any
 		commands = append(commands, map[string]any{"name": name, "result": result})
 	}
 
+	presetBitrate := 0
+	if preset := inputString(input, "preset", ""); preset != "" {
+		switch preset {
+		case "stable320":
+			add("preset.stable320.video", rt.commandWithResponse(111, "stream", map[string]any{"video": 2}, 1800*time.Millisecond))
+			presetBitrate = 12
+		case "quality640":
+			add("preset.quality640.video", rt.commandWithResponse(111, "stream", map[string]any{"video": 1}, 1800*time.Millisecond))
+			presetBitrate = 26
+		case "stop":
+			add("preset.stop.video", rt.commandWithResponse(111, "stream", map[string]any{"video": 0}, 1800*time.Millisecond))
+		case "custom":
+		default:
+			return nil, httpErr(http.StatusBadRequest, "preset must be stable320, quality640, stop or custom")
+		}
+	}
+
 	if streamMode := inputString(input, "streamMode", ""); streamMode != "" {
 		videoMode := 0
 		switch streamMode {
@@ -2551,8 +2644,14 @@ func (rt *CameraRuntime) ApplyDeviceConfig(input map[string]any) (map[string]any
 		}
 		add("stream.audio", rt.commandWithResponse(111, "stream", map[string]any{"audio": audio}, 1800*time.Millisecond))
 	}
+	if inputBool(input, "enableAudioNow", false) {
+		add("stream.audio", rt.commandWithResponse(111, "stream", map[string]any{"audio": 1}, 1800*time.Millisecond))
+	}
 
 	devControl := map[string]any{}
+	if presetBitrate > 0 {
+		devControl["rate_bit"] = presetBitrate
+	}
 	if value, ok, err := optionalInt(input, "bitrate", 1, 64); err != nil {
 		return nil, err
 	} else if ok {
@@ -2596,6 +2695,10 @@ func (rt *CameraRuntime) ApplyDeviceConfig(input map[string]any) (map[string]any
 	}
 
 	alarm := map[string]any{}
+	if inputBool(input, "disableDetectors", false) {
+		alarm["motionDetect"] = 0
+		alarm["audioDetect"] = 0
+	}
 	if value, ok, err := optionalEnumInt(input, "motionDetect", map[int]bool{0: true, 1: true}); err != nil {
 		return nil, err
 	} else if ok {
