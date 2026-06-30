@@ -20,6 +20,9 @@ const AUDIO_BYTES_PER_SAMPLE = 2
 const AUDIO_SILENCE_CHUNK = Buffer.alloc(AUDIO_SAMPLE_RATE * AUDIO_CHANNELS * AUDIO_BYTES_PER_SAMPLE)
 const EMPTY_CLIENT_TTL_MS = 15000
 const METRIC_WINDOW_MS = 5000
+const ONLINE_TRAFFIC_MS = 15000
+const STALE_TRAFFIC_MS = 45000
+const TRAFFIC_RESTART_MS = 60000
 
 function loadConfig() {
   const fallback = { server: { host: '127.0.0.1', port: 8088, bind: '0.0.0.0' }, cameras: [] }
@@ -185,6 +188,7 @@ class CameraRuntime {
     this.latestFrame = null
     this.lastVideoAt = null
     this.lastAudioAt = null
+    this.lastTrafficAt = null
     this.connectedAt = null
     this.startedAt = null
     this.restartCount = 0
@@ -218,15 +222,21 @@ class CameraRuntime {
 
     this.pppp.on('connected', (peer) => {
       this.connectedAt = Date.now()
+      this.lastTrafficAt = Date.now()
       this.lastError = null
       console.log(`${nowIso()} camera ${this.id} connected ${peer.address}:${peer.port}`)
       setTimeout(() => this.requestStreams(true), 200)
       setTimeout(() => this.safeCall('sendCMDgetParams'), 800)
     })
 
+    this.pppp.on('packet', () => {
+      this.lastTrafficAt = Date.now()
+    })
+
     this.pppp.on('videoFrame', ({ frame }) => {
       this.latestFrame = frame
       this.lastVideoAt = Date.now()
+      this.lastTrafficAt = this.lastVideoAt
       this.videoFrames += 1
       this.lastFrameBytes = frame.length
       this.recordMetric(this.videoMetric, frame.length)
@@ -235,12 +245,14 @@ class CameraRuntime {
 
     this.pppp.on('audioFrame', ({ frame }) => {
       this.lastAudioAt = Date.now()
+      this.lastTrafficAt = this.lastAudioAt
       this.audioFrames += 1
       this.recordMetric(this.audioMetric, frame.length)
       this.broadcastAudioFrame(frame)
     })
 
     this.pppp.on('cmd', (cmd) => {
+      this.lastTrafficAt = Date.now()
       this.lastCommand = String(cmd).trim()
     })
 
@@ -275,6 +287,10 @@ class CameraRuntime {
     if (!this.pppp) return
     if (!this.connectedAt && this.startedAt && now - this.startedAt > 20000) {
       this.restart('connect timeout')
+      return
+    }
+    if (this.connectedAt && this.lastTrafficAt && now - this.lastTrafficAt > TRAFFIC_RESTART_MS) {
+      this.restart('traffic timeout')
     }
   }
 
@@ -336,6 +352,7 @@ class CameraRuntime {
     this.latestFrame = null
     this.lastVideoAt = null
     this.lastAudioAt = null
+    this.lastTrafficAt = null
     this.videoMetric = []
     this.audioMetric = []
     this.lastFrameBytes = 0
@@ -377,6 +394,7 @@ class CameraRuntime {
     }
     this.connectedAt = null
     this.startedAt = null
+    this.lastTrafficAt = null
     if (clearClients) {
       for (const client of Array.from(this.videoClients)) client.cleanup()
       for (const client of Array.from(this.audioClients)) client.cleanup()
@@ -532,8 +550,9 @@ class CameraRuntime {
     this.start()
     this.lastSnapshotDemandAt = Date.now()
     this.requestStreams(false)
-    if (!this.latestFrame) {
-      writeJson(res, 503, { error: 'snapshot not ready', camera: this.id })
+    const health = this.health()
+    if (!this.latestFrame || health.state === 'offline' || health.state === 'disabled') {
+      writeJson(res, 503, { error: 'snapshot not ready', camera: this.id, healthState: health.state })
       return
     }
     res.writeHead(200, {
@@ -544,18 +563,37 @@ class CameraRuntime {
     res.end(this.latestFrame)
   }
 
+  health() {
+    if (this.camera.enabled === false) return { state: 'disabled', label: 'disabled' }
+    if (!this.pppp || !this.connectedAt) {
+      if (this.startedAt) return { state: 'connecting', label: 'connecting' }
+      return { state: 'offline', label: 'offline' }
+    }
+    if (!this.lastTrafficAt) return { state: 'connecting', label: 'connecting' }
+    const age = Date.now() - this.lastTrafficAt
+    if (age <= ONLINE_TRAFFIC_MS) return { state: 'online', label: 'online' }
+    if (age <= STALE_TRAFFIC_MS) return { state: 'stale', label: 'stale' }
+    return { state: 'offline', label: 'offline' }
+  }
+
   status(baseUrl) {
     const videoMetric = this.metric(this.videoMetric)
     const audioMetric = this.metric(this.audioMetric)
+    const health = this.health()
     return {
       id: this.id,
       name: this.camera.name || this.id,
       enabled: this.camera.enabled !== false,
       ip: this.camera.ip,
-      connected: Boolean(this.connectedAt),
+      connected: health.state === 'online',
+      transportConnected: Boolean(this.connectedAt),
+      healthState: health.state,
+      healthLabel: health.label,
       connectedAt: this.connectedAt ? new Date(this.connectedAt).toISOString() : null,
+      lastTrafficAt: this.lastTrafficAt ? new Date(this.lastTrafficAt).toISOString() : null,
       lastVideoAt: this.lastVideoAt ? new Date(this.lastVideoAt).toISOString() : null,
       lastAudioAt: this.lastAudioAt ? new Date(this.lastAudioAt).toISOString() : null,
+      lastTrafficAgeMs: this.lastTrafficAt ? Date.now() - this.lastTrafficAt : null,
       lastVideoAgeMs: this.lastVideoAt ? Date.now() - this.lastVideoAt : null,
       lastAudioAgeMs: this.lastAudioAt ? Date.now() - this.lastAudioAt : null,
       videoFrames: this.videoFrames,
@@ -651,24 +689,25 @@ function renderCameraConfigForm(camera) {
 
 function renderWizard(cameraOptions) {
   return `
-    <section class="wizard">
+    <section class="wizard setup-wizard">
       <header class="section-head">
         <div>
-          <h2>Setup wizard</h2>
-          <p class="meta">Works locally while your computer is connected to a camera AP without internet.</p>
+          <h2>New camera setup</h2>
+          <p class="meta">This wizard is fully local and keeps working when your computer is connected to a camera AP without internet.</p>
         </div>
       </header>
       <div class="steps">
         <section class="step">
-          <strong>1. Link</strong>
-          <p>For a new camera, connect this computer to the camera AP, then open this page through <code>http://127.0.0.1:8088/</code>. If the camera is already on LAN, stay on LAN.</p>
+          <strong>1. Prepare</strong>
+          <p>Keep this server running. If the camera is brand new, connect this computer to the camera AP, then open <code>http://127.0.0.1:8088/setup</code>. No internet is required.</p>
         </section>
         <section class="step">
-          <strong>2. Register</strong>
+          <strong>2. Add the temporary camera link</strong>
+          <p>Use broadcast discovery if you do not know the AP-side camera IP yet. For DID prefix <code>EEE</code>, PSK is usually <code>SHIX</code>.</p>
           <form data-add-camera class="config-form">
             <label><span>ID</span><input name="id" required pattern="[A-Za-z0-9_-]+" autocomplete="off" placeholder="a9_front"></label>
             <label><span>Name</span><input name="name" autocomplete="off" placeholder="Front door"></label>
-            <label><span>Camera IP</span><input name="ip" placeholder="192.168.1.203" inputmode="numeric" autocomplete="off"></label>
+            <label><span>Camera IP</span><input name="ip" placeholder="optional" inputmode="numeric" autocomplete="off"></label>
             <label><span>Discovery</span><input name="discovery" placeholder="255.255.255.255" inputmode="numeric" autocomplete="off"></label>
             <label><span>PSK</span><input name="psk" value="SHIX" autocomplete="off"></label>
             <label><span>User</span><input name="username" value="admin" autocomplete="off"></label>
@@ -679,7 +718,8 @@ function renderWizard(cameraOptions) {
           </form>
         </section>
         <section class="step">
-          <strong>3. Set Wi-Fi</strong>
+          <strong>3. Send your Wi-Fi settings to the camera</strong>
+          <p>The password is sent only to the selected camera. The camera stores it and usually needs a reboot.</p>
           <form data-wizard-wifi class="config-form compact">
             <label><span>Camera</span><select name="id">${cameraOptions}</select></label>
             <label><span>Target SSID</span><input name="ssid" autocomplete="off"></label>
@@ -690,8 +730,8 @@ function renderWizard(cameraOptions) {
           </form>
         </section>
         <section class="step">
-          <strong>4. Finish</strong>
-          <p>Reconnect this computer to the target Wi-Fi, wait for DHCP, then update the camera IP or discovery address if it changed.</p>
+          <strong>4. Finish on your normal LAN</strong>
+          <p>Reconnect this computer to the target Wi-Fi, wait for the camera to get DHCP, then update its IP or discovery address in Settings if needed.</p>
         </section>
       </div>
     </section>`
@@ -828,14 +868,25 @@ async function handleApi(req, res, pathname) {
   return true
 }
 
-function renderPage(req, cameraId = null) {
+function renderPage(req, cameraId = null, mode = 'dashboard') {
+  const isSetup = mode === 'setup'
   const statuses = allStatuses(req)
-  const cameras = cameraId ? statuses.filter((c) => c.id === cameraId) : statuses
+  const cameras = isSetup ? [] : (cameraId ? statuses.filter((c) => c.id === cameraId) : statuses)
   const configs = new Map(config.cameras.map((camera) => [camera.id, publicCameraConfig(camera)]))
   const cameraOptions = config.cameras.map((camera) => `
     <option value="${escapeHtml(camera.id)}">${escapeHtml(camera.name || camera.id)}</option>
   `).join('')
-  const manager = cameraId ? '' : renderWizard(cameraOptions || '<option value="">No cameras</option>')
+  const manager = isSetup
+    ? renderWizard(cameraOptions || '<option value="">No cameras</option>')
+    : (cameraId ? '' : `
+      <section class="overview-head">
+        <div>
+          <h2>Cameras</h2>
+          <p class="meta">Snapshot previews keep the overview light; open a camera for live video and sound.</p>
+        </div>
+        <a class="primary" href="/setup">Set up new camera</a>
+      </section>
+    `)
   const cards = cameras.map((c) => `
     <section class="camera ${cameraId ? 'detail' : 'summary-card'}" data-camera-id="${escapeHtml(c.id)}">
       <header class="camera-head">
@@ -843,7 +894,7 @@ function renderPage(req, cameraId = null) {
           <h2>${escapeHtml(c.name)}</h2>
           <p class="meta">${escapeHtml(c.ip || '')} · ${escapeHtml(c.id)}</p>
         </div>
-        <span class="state ${c.connected ? 'ok' : 'warn'}">${c.connected ? 'online' : 'connecting'}</span>
+        <span class="state ${escapeHtml(c.healthState || 'offline')}">${escapeHtml(c.healthLabel || 'offline')}</span>
       </header>
       <div class="media">
         ${cameraId
@@ -851,15 +902,10 @@ function renderPage(req, cameraId = null) {
           : `<a href="/cam/${encodeURIComponent(c.id)}"><img data-preview="${escapeHtml(c.id)}" src="/cam/${encodeURIComponent(c.id)}/snapshot.jpg?ts=${Date.now()}" alt="${escapeHtml(c.name)} preview"></a>`}
       </div>
       <div class="toolbar">
-        <button data-audio="${escapeHtml(c.id)}">Audio</button>
-        <a href="/cam/${encodeURIComponent(c.id)}">Open</a>
-        ${cameraId ? `<button data-live-reconnect="${escapeHtml(c.id)}">Reconnect</button>` : ''}
-        <button data-command="restart" data-id="${escapeHtml(c.id)}">Restart</button>
-        <button data-command="params" data-id="${escapeHtml(c.id)}">Params</button>
-        <button data-command="reboot" data-id="${escapeHtml(c.id)}">Reboot</button>
+        <a href="/cam/${encodeURIComponent(c.id)}">Open live</a>
+        <button data-audio="${escapeHtml(c.id)}">Sound</button>
+        ${cameraId ? `<button data-live-reconnect="${escapeHtml(c.id)}">Reconnect video</button>` : ''}
         <a href="/cam/${encodeURIComponent(c.id)}/snapshot.jpg" target="_blank">Snapshot</a>
-        <a href="/cam/${encodeURIComponent(c.id)}/video.mjpg" target="_blank">MJPEG</a>
-        <a href="/cam/${encodeURIComponent(c.id)}/audio.wav" target="_blank">WAV</a>
       </div>
       <audio id="audio-${escapeHtml(c.id)}" controls preload="none" hidden></audio>
       <dl class="stats">
@@ -867,13 +913,23 @@ function renderPage(req, cameraId = null) {
         <div><dt>FPS</dt><dd data-field="${escapeHtml(c.id)}:videoFps">${c.videoFps || 0}</dd></div>
         <div><dt>Video kbps</dt><dd data-field="${escapeHtml(c.id)}:videoKbps">${c.videoKbps || 0}</dd></div>
         <div><dt>Audio</dt><dd data-field="${escapeHtml(c.id)}:audioFrames">${c.audioFrames}</dd></div>
-        <div><dt>Mode</dt><dd data-field="${escapeHtml(c.id)}:streamMode">${escapeHtml(c.streamMode || 'idle')}</dd></div>
+        <div><dt>Status</dt><dd data-field="${escapeHtml(c.id)}:healthLabel">${escapeHtml(c.healthLabel || 'offline')}</dd></div>
         <div><dt>Clients</dt><dd data-field="${escapeHtml(c.id)}:clients">${c.videoClients}/${c.audioClients}</dd></div>
         <div><dt>Restarts</dt><dd data-field="${escapeHtml(c.id)}:restartCount">${c.restartCount}</dd></div>
       </dl>
       <details>
-        <summary>Camera</summary>
+        <summary>Settings</summary>
         ${renderCameraConfigForm(configs.get(c.id))}
+      </details>
+      <details>
+        <summary>Maintenance</summary>
+        <div class="toolbar maintenance">
+          <button data-command="restart" data-id="${escapeHtml(c.id)}">Reconnect camera session</button>
+          <button data-command="params" data-id="${escapeHtml(c.id)}">Refresh camera info</button>
+          <button data-command="reboot" data-confirm="Restart camera hardware?" data-id="${escapeHtml(c.id)}">Restart camera hardware</button>
+          <a href="/cam/${encodeURIComponent(c.id)}/video.mjpg" target="_blank">Raw MJPEG</a>
+          <a href="/cam/${encodeURIComponent(c.id)}/audio.wav" target="_blank">Raw WAV</a>
+        </div>
         <form data-wifi-camera="${escapeHtml(c.id)}" class="config-form compact">
           <label><span>Wi-Fi SSID</span><input name="ssid" autocomplete="off"></label>
           <label><span>Wi-Fi password</span><input name="password" type="password" autocomplete="new-password"></label>
@@ -900,9 +956,11 @@ function renderPage(req, cameraId = null) {
     h1 { font-size: 18px; margin: 0; font-weight: 650; }
     nav { display: flex; gap: 10px; align-items: center; }
     a, button { color: inherit; }
-    nav a, .toolbar a, button { border: 1px solid var(--line); background: var(--panel); text-decoration: none; padding: 7px 10px; border-radius: 6px; font: inherit; cursor: pointer; }
+    nav a, .toolbar a, button, .primary { border: 1px solid var(--line); background: var(--panel); text-decoration: none; padding: 7px 10px; border-radius: 6px; font: inherit; cursor: pointer; }
+    .primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
     main { width: min(1440px, 100%); margin: 0 auto; padding: 16px; }
     code { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
+    .overview-head { margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
     .wizard { margin-bottom: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
     .section-head { padding: 12px 14px; border-bottom: 1px solid var(--line); }
     .steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px; }
@@ -916,13 +974,15 @@ function renderPage(req, cameraId = null) {
     h2 { font-size: 16px; margin: 0 0 2px; font-weight: 650; }
     .meta { margin: 0; color: var(--muted); font-size: 12px; }
     .state { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
-    .state.ok { color: var(--ok); }
-    .state.warn { color: var(--warn); }
+    .state.online { color: var(--ok); }
+    .state.stale, .state.connecting { color: var(--warn); }
+    .state.offline, .state.disabled { color: var(--muted); }
     .media { aspect-ratio: 16 / 9; background: #050505; display: grid; place-items: center; }
     .detail .media { aspect-ratio: 4 / 3; }
     .media a { display: block; width: 100%; height: 100%; }
     .media img { width: 100%; height: 100%; object-fit: contain; display: block; }
     .toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
+    .maintenance { padding: 0 0 10px; border-top: 0; }
     audio:not([hidden]) { display: block; width: calc(100% - 24px); margin: 0 12px 12px; height: 36px; }
     .stats { margin: 0; padding: 10px 12px 12px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; border-top: 1px solid var(--line); }
     .stats div { min-width: 0; }
@@ -947,6 +1007,8 @@ function renderPage(req, cameraId = null) {
   <header class="top">
     <h1>BKCam</h1>
     <nav>
+      <a href="/">Dashboard</a>
+      <a href="/setup">Setup</a>
       <a href="/api/status">Status</a>
       <a href="/frigate.yml">Frigate</a>
       <a href="/go2rtc.yml">go2rtc</a>
@@ -1138,6 +1200,7 @@ function renderPage(req, cameraId = null) {
       const id = ev.target && ev.target.dataset && ev.target.dataset.id
       if (!action || !id) return
       ev.preventDefault()
+      if (ev.target.dataset.confirm && !window.confirm(ev.target.dataset.confirm)) return
       const old = ev.target.textContent
       try {
         ev.target.textContent = '...'
@@ -1154,13 +1217,13 @@ function renderPage(req, cameraId = null) {
         const data = await res.json()
         for (const cam of data.cameras) {
           const el = document.querySelector('[data-camera-id="' + cam.id + '"] .state')
-          if (el) { el.textContent = cam.connected ? 'online' : 'connecting'; el.className = 'state ' + (cam.connected ? 'ok' : 'warn') }
+          if (el) { el.textContent = cam.healthLabel || 'offline'; el.className = 'state ' + (cam.healthState || 'offline') }
           const fields = {
             videoFrames: cam.videoFrames,
             videoFps: cam.videoFps,
             videoKbps: cam.videoKbps,
             audioFrames: cam.audioFrames,
-            streamMode: cam.streamMode,
+            healthLabel: cam.healthLabel,
             clients: cam.videoClients + '/' + cam.audioClients,
             restartCount: cam.restartCount
           }
@@ -1227,6 +1290,10 @@ async function route(req, res) {
 
   if (pathname === '/') {
     writeText(res, 200, renderPage(req), 'text/html; charset=utf-8')
+    return
+  }
+  if (pathname === '/setup') {
+    writeText(res, 200, renderPage(req, null, 'setup'), 'text/html; charset=utf-8')
     return
   }
   if (pathname === '/frigate.yml') {

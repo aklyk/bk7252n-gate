@@ -194,6 +194,14 @@ class PPPP extends EventEmitter {
   }
 
   handlePacket(p, msg, rinfo) {
+      this.emit('packet', {
+        type: p.type,
+        channel: p.channel,
+        index: p.index,
+        size: p.size,
+        address: rinfo.address,
+        port: rinfo.port,
+      })
       //console.log(TYPE_DICT[p.type], p.size, p.channel, p.index)
       if (p.type == MSG_DRW) {
         this.emit(

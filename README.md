@@ -6,6 +6,7 @@ The main service keeps a local PPPP session to each camera and exposes:
 
 - Safari/Chrome dashboard
 - compact snapshot previews on the overview page
+- separate offline setup wizard at `/setup`
 - MJPEG video
 - WAV/raw PCM audio
 - snapshots
@@ -29,10 +30,13 @@ Open:
 http://<server-ip>:8088/
 ```
 
+Daily use starts on `/`: it shows lightweight camera previews and the main actions. The new-camera wizard is deliberately kept on `/setup`, so it does not get in the way during normal monitoring.
+
 Useful endpoints:
 
 ```text
 /api/status
+/setup
 /cam/<id>/video.mjpg
 /cam/<id>/audio.wav
 /cam/<id>/audio.raw
@@ -80,7 +84,7 @@ The generated snippet uses go2rtc/ffmpeg to restream MJPEG as H.264 RTSP. Audio 
 
 ## Camera Setup
 
-If a camera is already on Wi-Fi, no UART is needed for streaming. If you need to configure Wi-Fi without the vendor app, the dashboard has an offline setup wizard that still works when your computer is connected to the camera AP and has no internet.
+If a camera is already on Wi-Fi, no UART is needed for streaming. If you need to configure Wi-Fi without the vendor app, open `/setup`; the wizard still works when your computer is connected to the camera AP and has no internet.
 
 UART provisioning remains the most reliable known fallback:
 

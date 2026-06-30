@@ -6,6 +6,7 @@
 
 - Web UI для Safari/Chrome: `http://<server-ip>:8088/`
 - Компактные snapshot-превью на главной странице, без множества долгих MJPEG-соединений.
+- Пошаговый wizard отдельно: `/setup`.
 - Live MJPEG на странице конкретной камеры: `/cam/<id>`.
 - Offline setup wizard для режима, когда ноутбук подключен к AP камеры и интернета нет.
 - MJPEG видео: `/cam/<id>/video.mjpg`
@@ -93,6 +94,16 @@ curl -X POST http://127.0.0.1:8088/api/cameras/a9_front/wifi \
 Видео в UI идет обычным MJPEG через `<img>`, поэтому открывается напрямую в Safari без MSE/WebRTC.
 
 Звук в UI запускается кнопкой `Audio`: Safari требует пользовательский жест перед воспроизведением. После клика страница читает `/cam/<id>/audio.raw` как `pcm_s16le`, mono, 8000 Hz, и проигрывает через Web Audio. `/cam/<id>/audio.wav` оставлен как совместимый endpoint для `ffprobe`, VLC и внешних клиентов.
+
+## Health status
+
+`connected` в `/api/status` теперь означает, что камера недавно присылала трафик, а не просто когда-то прошла PPPP handshake. Для диагностики есть:
+
+- `healthState`: `online`, `stale`, `offline`, `connecting`, `disabled`
+- `transportConnected`: низкоуровневая PPPP-сессия была установлена
+- `lastTrafficAt` / `lastTrafficAgeMs`: свежесть реальных пакетов от камеры
+
+Если камера выключена или перестала слать пакеты, она больше не должна оставаться визуально online.
 
 ## Frigate
 
