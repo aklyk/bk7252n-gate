@@ -72,6 +72,17 @@ const PTZ_PAN_LEFT_STOP = 5
 const PTZ_PAN_RIGHT_START = 6
 const PTZ_PAN_RIGHT_STOP = 7
 
+function isUnicastIPv4(value) {
+  const parts = String(value || '').split('.')
+  if (parts.length !== 4) return false
+  const octets = parts.map((part) => Number(part))
+  if (!octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255)) return false
+  if (octets[0] === 0 || octets[0] >= 224) return false
+  if (octets.every((octet) => octet === 255)) return false
+  if (octets[3] === 0 || octets[3] === 255) return false
+  return true
+}
+
 class PPPP extends EventEmitter {
   constructor(options) {
     super()
@@ -95,9 +106,12 @@ class PPPP extends EventEmitter {
 
     this.isConnected = false
     this.punchCount = 0
+    this.peerAddress = null
+    this.peerPort = null
 
     this.broadcastDestination=this.options.broadcastip || '255.255.255.255',
     this.myIpAddressToBind=this.options.thisip
+    this.expectedAddress = isUnicastIPv4(this.options.expectedAddress) ? this.options.expectedAddress : null
     this.login = this.options.username || 'admin'
     this.password = this.options.password || '6666'
 
@@ -115,6 +129,8 @@ class PPPP extends EventEmitter {
     })
 
     this.socket.on('message', (msg, rinfo) => {
+      if (!this.acceptsPeer(rinfo)) return
+
       let d = crypt.decrypt(msg, this.cryptoKey)
 
       if (this.IP_DEBUG_MSG) {
@@ -134,6 +150,19 @@ class PPPP extends EventEmitter {
     }
     if (this.options.verbose) console.log("bind options:"+JSON.stringify(bindOptions))
     this.socket.bind(bindOptions)
+  }
+
+  acceptsPeer(rinfo) {
+    if (this.peerAddress) {
+      const ok = rinfo.address === this.peerAddress && rinfo.port === this.peerPort
+      if (!ok) this.emit('ignoredPeer', { address: rinfo.address, port: rinfo.port, expectedAddress: this.peerAddress, expectedPort: this.peerPort })
+      return ok
+    }
+    if (this.expectedAddress && rinfo.address !== this.expectedAddress) {
+      this.emit('ignoredPeer', { address: rinfo.address, port: rinfo.port, expectedAddress: this.expectedAddress })
+      return false
+    }
+    return true
   }
 
   setDebugIp(ip) {
@@ -225,6 +254,8 @@ class PPPP extends EventEmitter {
       if (p.type == MSG_P2P_RDY) {
         this.IP_CAM = rinfo.address
         this.PORT_CAM = rinfo.port
+        this.peerAddress = rinfo.address
+        this.peerPort = rinfo.port
 
         if (!this.isConnected) {
           this.isConnected = true

@@ -126,6 +126,23 @@ function defaultLanDiscovery() {
   return match ? `${match[1]}.${match[2]}.${match[3]}.255` : '255.255.255.255'
 }
 
+function isUnicastIPv4(value) {
+  const parts = String(value || '').split('.')
+  if (parts.length !== 4) return false
+  const octets = parts.map((part) => Number(part))
+  if (!octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255)) return false
+  if (octets[0] === 0 || octets[0] >= 224) return false
+  if (octets.every((octet) => octet === 255)) return false
+  if (octets[3] === 0 || octets[3] === 255) return false
+  return true
+}
+
+function expectedCameraAddress(camera) {
+  if (isUnicastIPv4(camera.ip)) return camera.ip
+  if (isUnicastIPv4(camera.discovery)) return camera.discovery
+  return ''
+}
+
 function normalizeCamera(input, existing = null) {
   const camera = existing ? { ...existing } : {}
   const id = asString(input.id, camera.id)
@@ -144,6 +161,7 @@ function normalizeCamera(input, existing = null) {
   camera.height = asInt(input.height, camera.height || 480)
   camera.enabled = asBool(input.enabled, camera.enabled !== false)
   camera.verbose = asBool(input.verbose, Boolean(camera.verbose))
+  camera.avStream = asBool(input.avStream, camera.avStream !== false)
   camera.ackRepeats = Math.min(9, Math.max(1, asInt(input.ackRepeats, camera.ackRepeats || 3)))
   if (!camera.ip && !camera.discovery) {
     throw Object.assign(new Error('camera ip or discovery address is required'), { statusCode: 400 })
@@ -183,6 +201,7 @@ function publicCameraConfig(camera) {
     height: camera.height || 480,
     enabled: camera.enabled !== false,
     verbose: Boolean(camera.verbose),
+    avStream: camera.avStream !== false,
     ackRepeats: camera.ackRepeats || 3,
   }
 }
@@ -217,6 +236,8 @@ class CameraRuntime {
     this.lastAudioAt = null
     this.lastTrafficAt = null
     this.connectedAt = null
+    this.peerAddress = null
+    this.peerPort = null
     this.startedAt = null
     this.restartCount = 0
     this.videoFrames = 0
@@ -243,11 +264,14 @@ class CameraRuntime {
       username: this.camera.username || 'admin',
       password: this.camera.password || '6666',
       ackRepeats: this.camera.ackRepeats || 3,
+      expectedAddress: expectedCameraAddress(this.camera),
       verbose: Boolean(this.camera.verbose),
     })
 
     this.pppp.on('connected', (peer) => {
       this.connectedAt = Date.now()
+      this.peerAddress = peer.address
+      this.peerPort = peer.port
       this.lastTrafficAt = Date.now()
       this.lastError = null
       console.log(`${nowIso()} camera ${this.id} connected ${peer.address}:${peer.port}`)
@@ -284,6 +308,13 @@ class CameraRuntime {
 
     this.pppp.on('log', (line) => {
       if (this.camera.verbose) console.log(`${nowIso()} camera ${this.id}: ${line}`)
+    })
+
+    this.pppp.on('ignoredPeer', (peer) => {
+      if (this.camera.verbose) {
+        const expected = peer.expectedPort ? `${peer.expectedAddress}:${peer.expectedPort}` : peer.expectedAddress
+        console.log(`${nowIso()} camera ${this.id}: ignored peer ${peer.address}:${peer.port}, expected ${expected}`)
+      }
     })
 
     this.pppp.on('socketError', (err) => {
@@ -342,8 +373,9 @@ class CameraRuntime {
   requestStreams(forceVideo = false) {
     const wantsVideo = forceVideo || this.videoClients.size > 0 || !this.latestFrame
     const wantsAudio = this.audioClients.size > 0
+    const wantsAvTransport = this.camera.avStream !== false && wantsVideo
 
-    if (wantsVideo && wantsAudio && this.safeCall('sendCMDrequestAv')) {
+    if (wantsVideo && (wantsAudio || wantsAvTransport) && this.safeCall('sendCMDrequestAv')) {
       this.streamMode = 'audio+video'
       return
     }
@@ -379,6 +411,8 @@ class CameraRuntime {
     this.lastVideoAt = null
     this.lastAudioAt = null
     this.lastTrafficAt = null
+    this.peerAddress = null
+    this.peerPort = null
     this.videoMetric = []
     this.audioMetric = []
     this.lastFrameBytes = 0
@@ -419,6 +453,8 @@ class CameraRuntime {
       this.pppp = null
     }
     this.connectedAt = null
+    this.peerAddress = null
+    this.peerPort = null
     this.startedAt = null
     this.lastTrafficAt = null
     if (clearClients) {
@@ -613,11 +649,15 @@ class CameraRuntime {
       name: this.camera.name || this.id,
       enabled: this.camera.enabled !== false,
       ip: this.camera.ip,
+      discovery: this.camera.discovery || '',
+      expectedAddress: expectedCameraAddress(this.camera),
       connected: health.state === 'online',
       transportConnected: Boolean(this.connectedAt),
       healthState: health.state,
       healthLabel: health.label,
       connectedAt: this.connectedAt ? new Date(this.connectedAt).toISOString() : null,
+      peerAddress: this.peerAddress,
+      peerPort: this.peerPort,
       lastTrafficAt: this.lastTrafficAt ? new Date(this.lastTrafficAt).toISOString() : null,
       lastVideoAt: this.lastVideoAt ? new Date(this.lastVideoAt).toISOString() : null,
       lastAudioAt: this.lastAudioAt ? new Date(this.lastAudioAt).toISOString() : null,
@@ -632,6 +672,7 @@ class CameraRuntime {
       audioKbps: audioMetric.kbps,
       lastFrameBytes: this.lastFrameBytes,
       streamMode: this.streamMode,
+      avStream: this.camera.avStream !== false,
       videoClients: this.videoClients.size,
       audioClients: this.audioClients.size,
       restartCount: this.restartCount,
@@ -709,6 +750,7 @@ function renderCameraConfigForm(camera) {
       ${renderInput('ackRepeats', 'ACK repeats', camera.ackRepeats, 'type="number" min="1" max="9"')}
       ${renderInput('width', 'Width', camera.width, 'type="number" min="1"')}
       ${renderInput('height', 'Height', camera.height, 'type="number" min="1"')}
+      <label class="check"><input name="avStream" type="checkbox" ${camera.avStream ? 'checked' : ''}><span>Request AV stream</span></label>
       <label class="check"><input name="enabled" type="checkbox" ${camera.enabled ? 'checked' : ''}><span>Enabled</span></label>
       <button type="submit">Save</button>
       <output></output>
@@ -794,6 +836,7 @@ async function provisionCamera(body, req) {
     height: asInt(body.height, existing?.height || 480),
     ackRepeats: asInt(body.ackRepeats, existing?.ackRepeats || 3),
     enabled: true,
+    avStream: asBool(body.avStream, existing?.avStream !== false),
     verbose: asBool(body.verbose, Boolean(existing?.verbose)),
   }, existing)
 
@@ -1015,6 +1058,8 @@ function renderPage(req, cameraId = null, mode = 'dashboard') {
         <div><dt>Status</dt><dd data-field="${escapeHtml(c.id)}:healthLabel">${escapeHtml(c.healthLabel || 'offline')}</dd></div>
         <div><dt>Clients</dt><dd data-field="${escapeHtml(c.id)}:clients">${c.videoClients}/${c.audioClients}</dd></div>
         <div><dt>Restarts</dt><dd data-field="${escapeHtml(c.id)}:restartCount">${c.restartCount}</dd></div>
+        <div><dt>Mode</dt><dd data-field="${escapeHtml(c.id)}:streamMode">${escapeHtml(c.streamMode || 'idle')}</dd></div>
+        <div><dt>Peer</dt><dd data-field="${escapeHtml(c.id)}:peer">${escapeHtml(c.peerAddress || c.expectedAddress || '')}</dd></div>
       </dl>
       <details>
         <summary>Settings</summary>
@@ -1330,7 +1375,9 @@ function renderPage(req, cameraId = null, mode = 'dashboard') {
             audioFrames: cam.audioFrames,
             healthLabel: cam.healthLabel,
             clients: cam.videoClients + '/' + cam.audioClients,
-            restartCount: cam.restartCount
+            restartCount: cam.restartCount,
+            streamMode: cam.streamMode,
+            peer: cam.peerAddress || cam.expectedAddress || ''
           }
           for (const [k, v] of Object.entries(fields)) {
             const f = document.querySelector('[data-field="' + cam.id + ':' + k + '"]')
