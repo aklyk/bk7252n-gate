@@ -1,0 +1,683 @@
+const dgram = require('dgram')
+const crypt = require('./crypt')
+
+const adcpm = require('./adpcm')
+const { EventEmitter } = require('events')
+
+const MCAM = 0xf1
+const MDRW = 0xd1
+
+const MSG_PUNCH = 0x41
+const MSG_P2P_RDY = 0x42
+const MSG_DRW = 0xd0
+const MSG_DRW_ACK = 0xd1
+const MSG_ALIVE = 0xe0
+const MSG_ALIVE_ACK = 0xe1
+const MSG_CLOSE = 0xf0
+
+const TYPE_DICT = {}
+TYPE_DICT[MSG_PUNCH] = 'MSG_PUNCH'
+TYPE_DICT[MSG_P2P_RDY] = 'MSG_P2P_RDY'
+TYPE_DICT[MSG_DRW] = 'MSG_DRW'
+TYPE_DICT[MSG_DRW_ACK] = 'MSG_DRW_ACK'
+TYPE_DICT[MSG_ALIVE] = 'MSG_ALIVE'
+TYPE_DICT[MSG_ALIVE_ACK] = 'MSG_ALIVE_ACK'
+TYPE_DICT[MSG_CLOSE] = 'MSG_CLOSE'
+
+const CMD_SET_CYPUSH = 1
+const CMD_CHECK_USER = 100
+const CMD_GET_PARMS = 101
+const CMD_DEV_CONTROL = 102
+const CMD_EDIT_USER = 106
+const CMD_GET_ALARM = 107
+const CMD_SET_ALARM = 108
+const CMD_STREAM = 111
+const CMD_GET_WIFI = 112
+const CMD_SCAN_WIFI = 113
+const CMD_SET_WIFI = 114
+const CMD_SET_DATETIME = 126 // returns result as cmd 128...
+const CMD_PTZ_CONTROL = 128
+const CMD_GET_RECORD_PARAM = 199
+const CMD_TALK_SEND = 300
+const CMD_SET_WHITELIGHT = 304
+const CMD_GET_WHITELIGHT = 305
+const CMD_GET_CLOUD_SUPPORT = 9000
+
+const CMD_DICT = {}
+CMD_DICT[CMD_SET_CYPUSH] = 'set_cypush'
+CMD_DICT[CMD_CHECK_USER] = 'check_user'
+CMD_DICT[CMD_GET_PARMS] = 'get_parms'
+CMD_DICT[CMD_DEV_CONTROL] = 'dev_control'
+CMD_DICT[CMD_EDIT_USER] = 'edit_user'
+CMD_DICT[CMD_GET_ALARM] = 'get_alarm'
+CMD_DICT[CMD_SET_ALARM] = 'set_alarm'
+CMD_DICT[CMD_STREAM] = 'stream'
+CMD_DICT[CMD_GET_WIFI] = 'get_wifi'
+CMD_DICT[CMD_SCAN_WIFI] = 'scan_wifi'
+CMD_DICT[CMD_SET_WIFI] = 'set_wifi'
+CMD_DICT[CMD_SET_DATETIME] = 'set_datetime'
+CMD_DICT[CMD_PTZ_CONTROL] = 'ptz_control'
+CMD_DICT[CMD_GET_RECORD_PARAM] = 'get_record_param'
+CMD_DICT[CMD_TALK_SEND] = 'talk_send'
+CMD_DICT[CMD_SET_WHITELIGHT] = 'set_whiteLight'
+CMD_DICT[CMD_GET_WHITELIGHT] = 'get_whiteLight'
+CMD_DICT[CMD_GET_CLOUD_SUPPORT] = 'get_cloudsupport'
+
+const PTZ_TILT_UP_START = 0
+const PTZ_TILT_UP_STOP = 1
+const PTZ_TILT_DOWN_START = 2
+const PTZ_TILT_DOWN_STOP = 3
+const PTZ_PAN_LEFT_START = 4
+const PTZ_PAN_LEFT_STOP = 5
+const PTZ_PAN_RIGHT_START = 6
+const PTZ_PAN_RIGHT_STOP = 7
+
+class PPPP extends EventEmitter {
+  constructor(options) {
+    super()
+    this.options = options || {}
+    this.socket = dgram.createSocket('udp4')
+    this.cryptoKey = crypt.keyFromPsk(this.options.psk || 'camera')
+    this.discoveryMessage = crypt.encrypt(Buffer.from('f1300000', 'hex'), this.cryptoKey)
+    this.broadcastTimer = null
+    this.closed = false
+
+    this.IP_DEBUG_MSG = null
+
+    this.DRW_PACKET_INDEX = 0
+
+    this.videoFrame = null
+
+    this.lastAudioFrame = -1
+
+    this.isConnected = false
+    this.punchCount = 0
+
+    this.broadcastDestination=this.options.broadcastip || '255.255.255.255',
+    this.myIpAddressToBind=this.options.thisip
+    this.login = this.options.username || 'admin'
+    this.password = this.options.password || '6666'
+
+    this.socket.on('error', (err) => {
+      this.emit('socketError', err)
+      try { this.socket.close() } catch (closeErr) {}
+    })
+
+    this.socket.on('listening', () => {
+      const address = this.socket.address()
+      console.log(`socket listening ${address.address}:${address.port}`)
+      this.socket.setBroadcast(true)
+
+      this.sendBroadcast()
+    })
+
+    this.socket.on('message', (msg, rinfo) => {
+      let d = crypt.decrypt(msg, this.cryptoKey)
+
+      if (this.IP_DEBUG_MSG) {
+        this.socket.send(d, 3300, IP_DEBUG_MSG)
+      }
+
+      let p = this.parsePacket(d)
+      if (p.magic1 === MCAM) {
+        this.handlePacket(p, msg, rinfo)
+      }
+
+    })
+
+    let bindOptions = {}
+    if (this.myIpAddressToBind){
+      bindOptions.address = this.myIpAddressToBind
+    }
+    if (this.options.verbose) console.log("bind options:"+JSON.stringify(bindOptions))
+    this.socket.bind(bindOptions)
+  }
+
+  setDebugIp(ip) {
+    this.IP_DEBUG_MSG = ip
+  }
+
+  sendBroadcast() {
+    if (this.closed) return
+    this.socket.send(this.discoveryMessage, 32108, this.broadcastDestination)
+    if (this.options.verbose) console.log('broadcast Message sent.')
+
+    if (!this.isConnected && this.punchCount == 0) {
+      this.broadcastTimer = setTimeout(this.sendBroadcast.bind(this), 500)
+    }
+  }
+
+  sendEnc(msg) {
+    let message
+    if (msg instanceof Buffer) {
+      message = msg
+    } else {
+      message = Buffer.from(msg, 'hex')
+    }
+
+    this.send(crypt.encrypt(message, this.cryptoKey))
+  }
+
+  send(msg) {
+    let message
+    if (msg instanceof Buffer) {
+      message = msg
+    } else {
+      message = Buffer.from(msg, 'hex')
+    }
+    this.socket.send(message, this.PORT_CAM, this.IP_CAM)
+
+    if (this.IP_DEBUG_MSG) {
+      this.socket.send(crypt.decrypt(message, this.cryptoKey), 3301, this.IP_DEBUG_MSG)
+    }
+  }
+
+  handlePacket(p, msg, rinfo) {
+      //console.log(TYPE_DICT[p.type], p.size, p.channel, p.index)
+      if (p.type == MSG_DRW) {
+        this.emit(
+          'log',
+          `Received ${TYPE_DICT[p.type]} size: ${p.size} channel: ${
+            p.channel
+          } index: ${p.index}`
+        )
+      } else {
+        this.emit('log', `Received ${TYPE_DICT[p.type]} size: ${p.size}`)
+      }
+
+      //reply to MSG_PUNCH to establish connection
+      if (p.type == MSG_PUNCH) {
+        if (this.punchCount++ < 5) {
+          this.socket.send(msg, rinfo.port, rinfo.address)
+          this.emit('log', `Sent ${TYPE_DICT[MSG_PUNCH]}`)
+        }
+      }
+
+      if (p.type == MSG_P2P_RDY) {
+        this.IP_CAM = rinfo.address
+        this.PORT_CAM = rinfo.port
+
+        if (!this.isConnected) {
+          this.isConnected = true
+          setTimeout(() => {
+            this.emit('connected', {
+              address: rinfo.address,
+              port: rinfo.port,
+            })
+          }, 500)
+        }
+      }
+
+      // reply to MSG_ALIVE
+      if (p.type == MSG_ALIVE) {
+        let buf = Buffer.alloc(4)
+        buf.writeUint8(MCAM, 0)
+        buf.writeUInt8(MSG_ALIVE_ACK, 1)
+        buf.writeUint16BE(0, 2)
+
+        // this.send(crypt.encrypt(buf).toString("hex"))
+        this.sendEnc(buf)
+        this.emit('log', `Sent ${TYPE_DICT[MSG_ALIVE_ACK]}`)
+      }
+
+      // reply to MSG_CLOSE
+      if (p.type == MSG_CLOSE) {
+        let buf = Buffer.alloc(4)
+        buf.writeUint8(MCAM, 0)
+        buf.writeUInt8(MSG_ALIVE, 1)
+        buf.writeUint16BE(0, 2)
+
+        // this.send(crypt.encrypt(buf).toString("hex"))
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.sendEnc(buf)
+        this.emit('log', `Sent ${TYPE_DICT[MSG_ALIVE]}`)
+      }
+
+      //handle MSG_DRW
+      if (p.type == MSG_DRW) {
+        //send MSG_DRW_ACK
+        let buf = Buffer.alloc(10)
+        buf.writeUint8(MCAM, 0)
+        buf.writeUint8(MSG_DRW_ACK, 1)
+        buf.writeUInt16BE(6, 2)
+        buf.writeUInt8(0xd1, 4)
+        buf.writeUInt8(p.channel, 5)
+        buf.writeUInt16BE(1, 6)
+        buf.writeUInt16BE(p.index, 8)
+
+        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
+        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
+        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
+        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
+        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
+        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
+        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
+        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
+        this.send(crypt.encrypt(buf, this.cryptoKey).toString('hex'))
+        this.emit('log', `Sent ${TYPE_DICT[MSG_DRW_ACK]} x3`)
+
+
+        //handle CMD Response
+        if (p.channel == 0) {
+          if (0 == p.data.indexOf(Buffer.from('060a', 'hex'))) {
+            let data = p.data.subarray(8)
+            this.emit('cmd', data.toString('ascii'))
+          }
+        }
+
+        //handle Video
+        if (p.channel == 1) {
+          this.handleVideoPacket(p)
+        }
+
+        //handle audio
+        if (p.channel == 2) {
+          if (this.isNewIndex(this.lastAudioFrame, p.index)) {
+            let raw
+            if (0 === p.data.indexOf(Buffer.from('55aa15a8aa01', 'hex'))) {
+              raw = p.data.subarray(0x20)
+              // visualize()
+            } else {
+              raw = p.data
+            }
+
+            let decoded = adcpm.decode(raw)
+            this.lastAudioFrame = p.index
+
+            this.emit('audioFrame', { frame: decoded, packetIndex: p.index })
+          }
+        }
+      }
+    }
+
+  isNewIndex(last, current) {
+    if (last < 0) return true
+    const diff = (current - last + 65536) % 65536
+    return diff > 0 && diff < 32768
+  }
+
+  indexDistance(start, current) {
+    return (current - start + 65536) % 65536
+  }
+
+  handleVideoPacket(p) {
+    const marker = Buffer.from('55aa15a80300', 'hex')
+    const isStart = p.data.indexOf(marker) === 0
+    let raw = p.data
+
+    if (isStart) {
+      if (p.data.length < 0x20) return
+      const expectedLength = p.data.readUInt32LE(16)
+      if (expectedLength <= 0 || expectedLength > 512 * 1024) return
+      raw = p.data.subarray(0x20)
+      this.videoFrame = {
+        startIndex: p.index,
+        expectedLength,
+        receivedLength: 0,
+        chunks: new Map(),
+        maxSlot: 0,
+      }
+    }
+
+    if (!this.videoFrame) return
+
+    const frame = this.videoFrame
+    const slot = this.indexDistance(frame.startIndex, p.index)
+    if (slot > 128) {
+      this.videoFrame = null
+      return
+    }
+
+    if (!frame.chunks.has(slot)) {
+      frame.chunks.set(slot, raw)
+      frame.receivedLength += raw.length
+      if (slot > frame.maxSlot) frame.maxSlot = slot
+    }
+
+    if (frame.receivedLength < frame.expectedLength) return
+
+    const ordered = []
+    let total = 0
+    for (let slotIndex = 0; slotIndex <= frame.maxSlot; slotIndex += 1) {
+      const chunk = frame.chunks.get(slotIndex)
+      if (!chunk) return
+      ordered.push(chunk)
+      total += chunk.length
+      if (total >= frame.expectedLength) break
+    }
+
+    const image = Buffer.concat(ordered, total).subarray(0, frame.expectedLength)
+    this.videoFrame = null
+    this.emit('videoFrame', { frame: image, packetIndex: p.index })
+  }
+
+  sendCMDPacket(msg) {
+    let data
+    if (msg instanceof Buffer) {
+      data = msg
+    } else {
+      data = Buffer.from(msg, 'ascii')
+    }
+    let buf = Buffer.alloc(data.length + 8)
+    buf.writeUInt8(0x06, 0)
+    buf.writeUInt8(0x0a, 1)
+    buf.writeUInt8(0xa0, 2)
+    buf.writeUInt8(0x80, 3)
+    buf.writeUInt32LE(data.length, 4)
+
+    data.copy(buf, 8)
+    this.sendDRWPacket(0, buf)
+    this.emit('log', `CMD sent: ${data.toString('ascii')}`)
+  }
+
+  sendDRWPacket(channel, data) {
+    let buf = Buffer.alloc(data.length + 8)
+    buf.writeUint8(MCAM, 0)
+    buf.writeUint8(MSG_DRW, 1)
+    buf.writeUInt16BE(data.length + 4, 2)
+    buf.writeUInt8(MDRW, 4)
+    buf.writeUInt8(channel, 5)
+    buf.writeUInt16BE(this.DRW_PACKET_INDEX++, 6)
+    data.copy(buf, 8)
+
+    this.sendEnc(buf)
+  }
+
+  sendCommand(command, args) {
+    let fixed_data = {
+      user: this.login,
+      pwd: this.password,
+      devmac:'0000'
+    }
+  /* incorrect password:
+  {
+        "cmd":  ...,
+        "result":       -3
+  }
+
+  incorrect user name: (or password field missing):
+  {
+        "cmd":  ...,
+        "result":       -1
+}*/
+
+
+
+    let data = {
+      pro: CMD_DICT[command],
+      cmd: command
+    }
+
+    this.sendCMDPacket(JSON.stringify({ ...data, ...args, ...fixed_data}))
+  }
+
+  sendCMDCheckUser() {
+    this.sendCommand(CMD_CHECK_USER);
+  }
+
+  sendCMDrequestVideo1() {
+    //"1080p" "HD" with 640x480
+    this.sendCommand(CMD_STREAM, { video: 1 });
+  }
+
+  sendCMDrequestVideo2() {
+    //"720p" "HD" with 320x240
+    this.sendCommand(CMD_STREAM, { video: 2 });
+  }
+
+  sendCMDrequestAudio() {
+    //Strange ADPCM format
+    this.sendCommand(CMD_STREAM, { audio: 1 });
+  }
+
+  sendCMDrequestAv() {
+    this.sendCommand(CMD_STREAM, { video: 1, audio: 1 });
+  }
+
+  sendCMDsetWifi(ssid, pw) {
+    this.sendCommand(CMD_SET_WIFI, {
+      wifissid: ssid,
+      encwifissid: ssid,
+      wifipwd: pw,
+      encwifipwd: pw,
+      encryption: 1
+    });
+  }
+
+  sendCMDscanWifi() {
+    this.sendCommand(CMD_SCAN_WIFI);
+  }
+
+  sendCMDgetWifi() {
+    this.sendCommand(CMD_GET_WIFI);
+  }
+
+  sendCMDgetRecordParam() {
+    this.sendCommand(CMD_GET_RECORD_PARAM);
+  }
+
+  sendCMDgetParams() {
+    this.sendCommand(CMD_GET_PARMS);
+
+    /* returns e.g.
+    {
+        "cmd":  101,
+        "result":       0,
+        "tz":   -8,
+        "time": 1699397280,
+        "icut": 0,
+        "batValue":     90,
+        "batStatus":    1,
+        "sysver":       "HQLS_HK66_DP_20230802 20:08:13",
+        "mcuver":       "1.1.1.1",
+        "isShow4KMenu": 0,
+        "isShowIcutAuto":       1,
+        "rotmir":       0,
+        "signal":       100,
+        "lamp": 0
+}
+    */
+  }
+
+  sendCMDIr(isOn) {
+    this.sendCommand(CMD_DEV_CONTROL, { icut: isOn ? 1 : 0});
+  }
+
+  sendCMDTalkSend() {
+    // it is unclear for me what this really does
+    this.sendCommand(CMD_TALK_SEND, { isSend: 1 });
+
+    /*
+    returns like:
+    {
+        "cmd":  300,
+        "result":       0
+    }
+    */
+  }
+
+
+  sendCMDGetWhiteLight() {
+    this.sendCommand(CMD_GET_WHITELIGHT);
+  }
+
+  sendCMDSetWhiteLight(isOn) {
+    this.sendCommand(CMD_SET_WHITELIGHT, { status: isOn ? 1 : 0});
+  }
+
+  sendCMDHeartBeat() {
+    this.sendCommand(CMD_DEV_CONTROL, { heart: 1 });
+  }
+
+  /*
+  my_timezone_offset means: when the device interprets the timestamp,
+  adjust according to this offset. So if my_timezone_offset is -3600,
+  the device will add (not subtract!) 3600 seconds to the timestamp given,
+  before setting it.
+
+  the timestamp is in seconds since epoch.
+
+  this method do not set the local timezone of the device, as reported by
+  get_parms. (I don't know how to do that, if even possible)
+  */
+  sendCMDsetDateTime(my_timezone_offset, timestamp) {
+    this.sendCommand(CMD_SET_DATETIME, {
+      tz: my_timezone_offset,
+      time: timestamp,
+    });
+  }
+
+  sendCMDsetPushServer() {
+    this.sendCommand(CMD_SET_CYPUSH,
+      {
+        "pushIp": "192.168.7.20",
+        "pushPort": 5432,
+      }
+    );
+    var unused_args =  {
+       "pushInterval": 30,
+       "isPushVideo": 0,
+       "isPushPic": 0,
+       "cyAdmin": "<username>",
+       "cyPwd": "<password>",
+    };
+  }
+
+  sendCMDsetAlarm() {
+    this.sendCommand(CMD_SET_ALARM,      {
+      "pirPush": 1,
+      "pirenable": 1,
+      "pirsensitive": 2,
+      "pirDelayTime": 5,
+      "pirvideo": 0,
+      "pirvideotime": 0,
+      }
+    );
+
+    //  "pirsensitive": 1, -- almost never triggers, 3 -- triggers most often
+  }
+
+  sendCMDeditUser(userToEdit, newPwd, newUsername) {
+    this.sendCommand(CMD_EDIT_USER, {
+      "edituser" : userToEdit,
+      "newpwd" : newPwd,
+      "newuser" : newUsername,
+        }
+    );
+
+    /* additional reply:
+    {
+      "count":	1,
+    }
+    perhaps the number of times password has changed, nope, it is always 1
+    */
+  }
+
+  sendCMDGetDeviceFirmwareInfo() {
+    this.sendCommand(CMD_GET_CLOUD_SUPPORT);
+
+      /*
+      the command name is a mis-nomer. this is more like TF card support,
+      firmware version and flashability. Returns something like:
+      {
+        "cmd":  9000,
+        "result":       0,
+        "flashOrTf":    1,
+        "uploadType":   0,
+        "isExistTf":    0,
+        "productName":  "HQLS_HK66_DP230802",
+        "fwVer":        10000,
+        "supportNewUp": 1
+    }
+    */
+  }
+
+  sendCMDGetAlarm() {
+    this.sendCommand(CMD_GET_ALARM);
+
+    /*
+    Returns something like:
+    {
+        "cmd":  107,
+        "result":       0,
+        "pirenable":    0,
+        "pirsensitive": 3,
+        "pirvideo":     0,
+        "pirPush":      0,
+        "pirvideotime": 10,
+        "pirDelayTime": 120,
+        "AalarmInterval":       2,
+        "pirCloudUpCount":      50
+    }
+    */
+  }
+
+  // For direction, use any of the PTZ_PAN/TILT constants
+  sendCMDPtzControl(direction) {
+    this.sendCommand(CMD_PTZ_CONTROL, { parms: 0, value: direction});
+  }
+
+  sendCMDPtzReset() {
+    this.sendCommand(CMD_PTZ_CONTROL, { parms: 1, value: 132});
+  }
+
+  sendCMDReboot() {
+    this.sendCommand(CMD_DEV_CONTROL, { reboot: 1});
+  }
+
+  sendCMDReset() {
+    this.sendCommand(CMD_DEV_CONTROL, { reset: 1});
+  }
+
+  parsePacket(buff) {
+    let buf, magic1, type, size, magic2, channel, index, data
+    try {
+      buf = Buffer.from(buff)
+      magic1 = buf.readUInt8(0)
+      type = buf.readUInt8(1)
+      size = buf.readUInt16BE(2)
+      magic2 = buf.readUInt8(4)
+      channel = buf.readUInt8(5)
+      index = buf.readUInt16BE(6)
+      data = buf.subarray(8)
+    } catch (e) {}
+
+    return {
+      magic1,
+      type,
+      size,
+      magic2,
+      channel,
+      index,
+      data,
+    }
+  }
+
+  destroy() {
+    this.closed = true
+    if (this.broadcastTimer) {
+      clearTimeout(this.broadcastTimer)
+      this.broadcastTimer = null
+    }
+    if (this.isConnected) {
+      this.sendEnc(Buffer.from([MCAM, MSG_CLOSE, 0, 0]))
+      this.sendEnc(Buffer.from([MCAM, MSG_CLOSE, 0, 0]))
+      this.sendEnc(Buffer.from([MCAM, MSG_CLOSE, 0, 0]))
+    }
+    this.socket.close()
+  }
+}
+
+module.exports = PPPP

@@ -1,0 +1,26 @@
+.DS_Store
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+*.log
+
+# Local runtime configuration and captures
+bkcam-server/config.json
+*.pcap
+*.pcapng
+*.mjpg
+*.wav
+*.raw
+
+# Generated archives and proprietary blobs
+*.zip
+*.bin
+*.elf
+*.map
+
+# Local build outputs
+a9serv/pppp
+dist/
+build/
+coverage/

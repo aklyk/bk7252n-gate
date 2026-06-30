@@ -1,0 +1,14 @@
+{
+  "name": "bkcam-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local BK7252N/A9 PPPP camera dashboard and Frigate export server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
