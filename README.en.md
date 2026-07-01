@@ -81,6 +81,8 @@ If the camera is new and exposes its own AP:
 
 Fixed DHCP leases are recommended. Use unicast `discovery` equal to each camera IP, so one camera cannot accidentally occupy another camera card.
 
+Camera deletion is on the camera page under `Service` -> `Danger zone`. It removes only the local BKCam profile and does not reset settings stored in the camera.
+
 ## Useful URLs
 
 ```text
@@ -94,6 +96,12 @@ Fixed DHCP leases are recommended. Use unicast `discovery` equal to each camera 
 /cam/<id>/snapshot.jpg
 /frigate.yml         Frigate config
 /go2rtc.yml          go2rtc config
+```
+
+Profile deletion API:
+
+```text
+DELETE /api/cameras/<id>
 ```
 
 ## Frigate And go2rtc

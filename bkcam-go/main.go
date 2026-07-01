@@ -831,7 +831,7 @@ var uiText = map[string]map[string]string{
 		"wizardStep4": "4. Открыть камеру", "wizardStep4Text": "Новая камера появится на главной. Если IP неизвестен, закрепите DHCP lease и обновите адрес в профиле.",
 		"targetSSID": "Целевой SSID", "targetPassword": "Пароль целевой сети", "currentIP": "Текущий IP", "currentDiscovery": "Текущий discovery",
 		"finalIP": "Финальный LAN IP", "finalDiscovery": "Финальный discovery", "cameraPassword": "Пароль камеры", "writeAndSave": "Записать и сохранить",
-		"backToOverview": "К обзору", "liveView": "Live", "currentStream": "Текущий поток", "quickActions": "Быстрые действия", "gatewayProfileHelp": "Это локальные настройки шлюза: имя, адрес, оверлей и экспорт.", "overlayGroup": "Надписи на картинке", "connectionGroup": "Адрес и доступ", "expertConnection": "Протокол и доступ", "exportLinks": "Экспорт", "openWizard": "Открыть мастер", "cameraOffline": "Камера недоступна", "settingsStatus": "Статус настройки",
+		"backToOverview": "К обзору", "liveView": "Live", "currentStream": "Текущий поток", "quickActions": "Быстрые действия", "gatewayProfileHelp": "Это локальные настройки шлюза: имя, адрес, оверлей и экспорт.", "overlayGroup": "Надписи на картинке", "connectionGroup": "Адрес и доступ", "expertConnection": "Протокол и доступ", "exportLinks": "Экспорт", "openWizard": "Открыть мастер", "cameraOffline": "Камера недоступна", "settingsStatus": "Статус настройки", "dangerZone": "Опасная зона", "deleteCamera": "Удалить камеру", "deleteCameraHelp": "Удаляет только локальный профиль из BKCam. Настройки в самой камере не меняются.", "deleteConfirm": "Удалить камеру из BKCam? Это удалит только локальный профиль.", "deleted": "Удалено",
 	},
 	"en": {
 		"dashboard": "Overview", "setup": "Wizard", "status": "API status", "setupNew": "Add camera",
@@ -866,7 +866,7 @@ var uiText = map[string]map[string]string{
 		"wizardStep4": "4. Open the camera", "wizardStep4Text": "The new camera appears on the overview. If the IP is unknown, reserve DHCP and update the profile.",
 		"targetSSID": "Target SSID", "targetPassword": "Target password", "currentIP": "Current IP", "currentDiscovery": "Current discovery",
 		"finalIP": "Final LAN IP", "finalDiscovery": "Final discovery", "cameraPassword": "Camera password", "writeAndSave": "Write and save",
-		"backToOverview": "Back to overview", "liveView": "Live", "currentStream": "Current stream", "quickActions": "Quick actions", "gatewayProfileHelp": "These are gateway-local settings: name, address, overlay and export.", "overlayGroup": "Image overlay", "connectionGroup": "Address and access", "expertConnection": "Protocol and access", "exportLinks": "Export", "openWizard": "Open wizard", "cameraOffline": "Camera unavailable", "settingsStatus": "Settings status",
+		"backToOverview": "Back to overview", "liveView": "Live", "currentStream": "Current stream", "quickActions": "Quick actions", "gatewayProfileHelp": "These are gateway-local settings: name, address, overlay and export.", "overlayGroup": "Image overlay", "connectionGroup": "Address and access", "expertConnection": "Protocol and access", "exportLinks": "Export", "openWizard": "Open wizard", "cameraOffline": "Camera unavailable", "settingsStatus": "Settings status", "dangerZone": "Danger zone", "deleteCamera": "Delete camera", "deleteCameraHelp": "Removes only the local BKCam profile. Settings stored in the camera are not changed.", "deleteConfirm": "Delete this camera from BKCam? This removes only the local profile.", "deleted": "Deleted",
 	},
 }
 
@@ -1688,6 +1688,12 @@ func renderMaintenancePanel(id, pathID, lang string) string {
         <a href="/cam/%s/video.mjpg" target="_blank">%s</a>
         <a href="/cam/%s/audio.wav" target="_blank">%s</a>
       </div>
+      <div class="danger-zone">
+        <h4>%s</h4>
+        <p>%s</p>
+        <button class="danger" data-delete-camera="%s" data-confirm="%s">%s</button>
+        <output></output>
+      </div>
     </details>`,
 		htmlValue(t("maintenance")),
 		htmlValue(id), htmlValue(t("reconnectSession")),
@@ -1695,7 +1701,9 @@ func renderMaintenancePanel(id, pathID, lang string) string {
 		htmlValue(t("rebootConfirm")), htmlValue(id), htmlValue(t("rebootHardware")),
 		htmlValue(id),
 		htmlValue(t("wifiSSID")), htmlValue(t("wifiPassword")), htmlValue(t("reboot")), htmlValue(t("setWifi")),
-		pathID, htmlValue(t("rawMJPEG")), pathID, htmlValue(t("rawWAV")))
+		pathID, htmlValue(t("rawMJPEG")), pathID, htmlValue(t("rawWAV")),
+		htmlValue(t("dangerZone")), htmlValue(t("deleteCameraHelp")),
+		htmlValue(id), htmlValue(t("deleteConfirm")), htmlValue(t("deleteCamera")))
 }
 
 func renderCameraPanel(c, config map[string]any, lang string, detail bool) string {
@@ -1912,6 +1920,11 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
 	    .segment input:checked + span { border-color: var(--accent); color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
 	    .form-section .config-form { margin-top: 10px; }
 	    .device-output { grid-column: 1 / -1; margin: 0; max-height: 220px; overflow: auto; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 8px; font-size: 11px; white-space: pre-wrap; }
+	    .danger-zone { border-top: 1px solid var(--line); padding-top: 12px; }
+	    .danger-zone h4 { margin: 0 0 6px; font-size: 13px; color: var(--bad); }
+	    .danger-zone p { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+	    button.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); background: color-mix(in srgb, var(--bad) 8%, var(--panel)); }
+	    button.danger:hover { color: #fff; background: var(--bad); border-color: var(--bad); }
 	    @media (max-width: 1100px) { .detail-layout, .settings-layout { grid-template-columns: 1fr; } .side-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; } }
 	    @media (max-width: 760px) { header.top { align-items: flex-start; flex-direction: column; padding: 10px 14px; } nav { flex-wrap: wrap; width: 100%; } .overview-head { align-items: flex-start; flex-direction: column; } .config-form, .config-form.compact, .form-block { grid-template-columns: 1fr; } .side-panel { grid-template-columns: 1fr; } .live-media { min-height: 240px; } .toolbar > * { flex: 1 1 128px; } }
 	    @media (max-width: 520px) { main { padding: 10px; } .grid { grid-template-columns: minmax(0, 1fr); } .camera-detail, .detail-layout, .settings-layout, .side-panel, .live-panel, .panel, .camera-card { width: calc(100vw - 28px); max-width: calc(100vw - 28px); } nav a[href="/api/status"], nav a[href="/frigate.yml"], nav a[href="/go2rtc.yml"] { display: none; } nav a { flex: 0 0 auto; padding: 7px 9px; } .camera-head { align-items: flex-start; } .state { max-width: 42%; overflow: hidden; text-overflow: ellipsis; } .toolbar { display: grid; grid-template-columns: minmax(0, 1fr); } .toolbar > * { width: 100%; } .stats, .side-panel .stats { grid-template-columns: 1fr; } .media { min-height: 160px; } .segmented { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); } }
@@ -1940,6 +1953,7 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       autoRead: ` + strconv.Quote(t("autoRead")) + `,
       autoReadOk: ` + strconv.Quote(t("autoReadOk")) + `,
       autoReadTimeout: ` + strconv.Quote(t("autoReadTimeout")) + `,
+      deleted: ` + strconv.Quote(t("deleted")) + `,
       sound: ` + strconv.Quote(t("sound")) + `,
       stop: ` + strconv.Quote(t("stop")) + `
     }
@@ -2231,6 +2245,27 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       if (reconnectId) {
         ev.preventDefault()
         reconnectLive(reconnectId, true)
+        return
+      }
+
+      const deleteId = ev.target && ev.target.dataset && ev.target.dataset.deleteCamera
+      if (deleteId) {
+        ev.preventDefault()
+        if (ev.target.dataset.confirm && !window.confirm(ev.target.dataset.confirm)) return
+        const box = ev.target.closest('.danger-zone')
+        const out = box && box.querySelector('output')
+        const old = ev.target.textContent
+        try {
+          ev.target.disabled = true
+          ev.target.textContent = '...'
+          await sendJson('/api/cameras/' + encodeURIComponent(deleteId), 'DELETE')
+          if (out) out.textContent = UI.deleted
+          setTimeout(() => { location.href = '/' }, 500)
+        } catch (err) {
+          ev.target.disabled = false
+          ev.target.textContent = old
+          if (out) out.textContent = err.message
+        }
         return
       }
 
