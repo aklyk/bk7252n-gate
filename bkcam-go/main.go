@@ -54,7 +54,7 @@ const (
 	staleTrafficWindow   = 45 * time.Second
 	trafficRestartWindow = 60 * time.Second
 	streamRequestWindow  = 2 * time.Second
-	videoRefreshWindow   = 6 * time.Second
+	videoRefreshWindow   = 30 * time.Second
 	videoStaleWindow     = 8 * time.Second
 	audioStaleWindow     = 4 * time.Second
 	mediaRestartWindow   = 16 * time.Second
@@ -255,6 +255,11 @@ type commandResponse struct {
 	Data map[string]any
 }
 
+type videoOutputJob struct {
+	frame []byte
+	at    time.Time
+}
+
 type CameraRuntime struct {
 	cfg CameraConfig
 
@@ -266,35 +271,39 @@ type CameraRuntime struct {
 	peerAddress string
 	peerPort    int
 
-	latestFrame []byte
-	lastVideoAt time.Time
-	lastAudioAt time.Time
-	lastTraffic time.Time
+	latestFrame       []byte
+	latestOutputFrame []byte
+	lastVideoAt       time.Time
+	lastAudioAt       time.Time
+	lastTraffic       time.Time
 
-	videoFrames uint64
-	audioFrames uint64
+	videoFrames        uint64
+	audioFrames        uint64
+	invalidVideoFrames uint64
 
 	videoMetric []metricPoint
 	audioMetric []metricPoint
 
-	lastFrameBytes  int
-	frameWidth      int
-	frameHeight     int
-	streamMode      string
-	lastError       string
-	lastCommand     string
-	lastCommandAt   time.Time
-	lastCommandJSON map[string]any
-	commandWaiters  map[int][]chan commandResponse
-	restartCount    int
-	lastRestartAt   time.Time
+	lastFrameBytes     int
+	frameWidth         int
+	frameHeight        int
+	lastInvalidVideoAt time.Time
+	streamMode         string
+	lastError          string
+	lastCommand        string
+	lastCommandAt      time.Time
+	lastCommandJSON    map[string]any
+	commandWaiters     map[int][]chan commandResponse
+	restartCount       int
+	lastRestartAt      time.Time
 
 	lastVideoRequest time.Time
 	lastAudioRequest time.Time
 	lastMediaNudge   time.Time
 
-	videoClients map[*Client]struct{}
-	audioClients map[*Client]struct{}
+	videoClients  map[*Client]struct{}
+	audioClients  map[*Client]struct{}
+	videoOutputCh chan videoOutputJob
 
 	lastSnapshotDemand time.Time
 	stopCh             chan struct{}
@@ -2379,14 +2388,17 @@ func (a *App) renderGo2RTC(base string) string {
 }
 
 func NewCameraRuntime(cfg CameraConfig) *CameraRuntime {
-	return &CameraRuntime{
+	rt := &CameraRuntime{
 		cfg:            cfg,
 		streamMode:     "idle",
 		videoClients:   map[*Client]struct{}{},
 		audioClients:   map[*Client]struct{}{},
+		videoOutputCh:  make(chan videoOutputJob, 1),
 		commandWaiters: map[int][]chan commandResponse{},
 		stopCh:         make(chan struct{}),
 	}
+	go rt.videoOutputLoop()
+	return rt
 }
 
 func (rt *CameraRuntime) UpdateConfig(cfg CameraConfig) {
@@ -2397,6 +2409,7 @@ func (rt *CameraRuntime) UpdateConfig(cfg CameraConfig) {
 	rt.peerAddress = ""
 	rt.peerPort = 0
 	rt.latestFrame = nil
+	rt.latestOutputFrame = nil
 	rt.lastVideoAt = time.Time{}
 	rt.lastAudioAt = time.Time{}
 	rt.lastTraffic = time.Time{}
@@ -2457,7 +2470,22 @@ func (rt *CameraRuntime) Start() {
 	}
 	pp.OnVideo = func(frame []byte, _ uint16) {
 		now := time.Now()
-		width, height, _ := jpegFrameSize(frame)
+		width, height, ok := validateJPEGFrame(frame)
+		if !ok {
+			atomic.AddUint64(&rt.invalidVideoFrames, 1)
+			shouldLog := false
+			rt.mu.Lock()
+			if rt.lastInvalidVideoAt.IsZero() || now.Sub(rt.lastInvalidVideoAt) > 10*time.Second {
+				rt.lastInvalidVideoAt = now
+				shouldLog = true
+			}
+			rt.lastTraffic = now
+			rt.mu.Unlock()
+			if shouldLog {
+				log.Printf("camera %s dropped invalid JPEG frame", rt.cfg.ID)
+			}
+			return
+		}
 		rt.mu.Lock()
 		rt.videoMetric = appendMetric(trimMetric(rt.videoMetric, now), now, len(frame))
 		rt.latestFrame = append(rt.latestFrame[:0], frame...)
@@ -2468,10 +2496,10 @@ func (rt *CameraRuntime) Start() {
 		rt.frameHeight = height
 		rt.lastError = ""
 		atomic.AddUint64(&rt.videoFrames, 1)
-		clients := keys(rt.videoClients)
+		hasOutputDemand := len(rt.videoClients) > 0 || now.Sub(rt.lastSnapshotDemand) < 10*time.Second
 		rt.mu.Unlock()
-		for _, c := range clients {
-			sendDropOld(c.ch, frame)
+		if hasOutputDemand {
+			rt.enqueueVideoOutput(frame, now)
 		}
 	}
 	pp.OnAudio = func(pcm []byte, _ uint16) {
@@ -2516,6 +2544,44 @@ func (rt *CameraRuntime) Start() {
 	go pp.Run()
 	go rt.healthLoop()
 	go rt.streamLoop()
+}
+
+func (rt *CameraRuntime) enqueueVideoOutput(frame []byte, at time.Time) {
+	job := videoOutputJob{frame: append([]byte(nil), frame...), at: at}
+	select {
+	case rt.videoOutputCh <- job:
+		return
+	default:
+	}
+	select {
+	case <-rt.videoOutputCh:
+	default:
+	}
+	select {
+	case rt.videoOutputCh <- job:
+	default:
+	}
+}
+
+func (rt *CameraRuntime) videoOutputLoop() {
+	for {
+		select {
+		case job := <-rt.videoOutputCh:
+			out := rt.frameForOutput(job.frame, job.at)
+			if len(out) == 0 {
+				continue
+			}
+			rt.mu.Lock()
+			rt.latestOutputFrame = append(rt.latestOutputFrame[:0], out...)
+			clients := keys(rt.videoClients)
+			rt.mu.Unlock()
+			for _, c := range clients {
+				sendDropOld(c.ch, out)
+			}
+		case <-rt.stopCh:
+			return
+		}
+	}
 }
 
 func (rt *CameraRuntime) WaitForSession(timeout time.Duration) bool {
@@ -2644,7 +2710,9 @@ func (rt *CameraRuntime) streamLoop() {
 		} else if refreshVideo {
 			rt.requestStreams(false)
 		} else if staleAudio {
-			if !rt.nudgeStreams("audio stale") {
+			if hasVideo {
+				rt.requestAudioOnly()
+			} else if !rt.nudgeStreams("audio stale") {
 				rt.requestStreams(false)
 			}
 		}
@@ -2721,6 +2789,30 @@ func (rt *CameraRuntime) requestStreams(forceVideo bool, videoOnly ...bool) {
 			}
 			rt.mu.Unlock()
 		}
+	}
+}
+
+func (rt *CameraRuntime) requestAudioOnly() {
+	rt.mu.Lock()
+	pp := rt.pppp
+	now := time.Now()
+	wantsAudio := len(rt.audioClients) > 0
+	sendAudio := wantsAudio && (rt.lastAudioRequest.IsZero() || now.Sub(rt.lastAudioRequest) >= streamRequestWindow)
+	if sendAudio {
+		rt.lastAudioRequest = now
+	}
+	rt.mu.Unlock()
+	if pp == nil || !sendAudio {
+		return
+	}
+	if err := pp.SendCommand(111, "stream", map[string]any{"audio": 1}); err == nil {
+		rt.mu.Lock()
+		if rt.streamMode == "video" || rt.streamMode == "audio+video" {
+			rt.streamMode = "audio+video"
+		} else {
+			rt.streamMode = "audio"
+		}
+		rt.mu.Unlock()
 	}
 }
 
@@ -3210,6 +3302,9 @@ func (rt *CameraRuntime) Status(base string) map[string]any {
 		"lastAudioAgeMs":        ageMs(rt.lastAudioAt),
 		"videoFrames":           atomic.LoadUint64(&rt.videoFrames),
 		"audioFrames":           atomic.LoadUint64(&rt.audioFrames),
+		"invalidVideoFrames":    atomic.LoadUint64(&rt.invalidVideoFrames),
+		"lastInvalidVideoAt":    formatTime(rt.lastInvalidVideoAt),
+		"lastInvalidVideoAgeMs": ageMs(rt.lastInvalidVideoAt),
 		"videoFps":              videoMetric.Rate,
 		"audioPacketsPerSecond": audioMetric.Rate,
 		"videoKbps":             videoMetric.Kbps,
@@ -3324,8 +3419,12 @@ func (rt *CameraRuntime) ServeVideo(w http.ResponseWriter, r *http.Request) {
 	client := &Client{ch: make(chan []byte, 8)}
 	rt.mu.Lock()
 	rt.videoClients[client] = struct{}{}
-	if len(rt.latestFrame) > 0 && !rt.lastVideoAt.IsZero() && time.Since(rt.lastVideoAt) <= videoStaleWindow {
-		sendDropOld(client.ch, append([]byte(nil), rt.latestFrame...))
+	initialFrame := rt.latestOutputFrame
+	if len(initialFrame) == 0 {
+		initialFrame = rt.latestFrame
+	}
+	if len(initialFrame) > 0 && !rt.lastVideoAt.IsZero() && time.Since(rt.lastVideoAt) <= videoHoldWindow {
+		sendDropOld(client.ch, append([]byte(nil), initialFrame...))
 	}
 	rt.mu.Unlock()
 	defer rt.removeVideoClient(client)
@@ -3346,11 +3445,10 @@ func (rt *CameraRuntime) ServeVideo(w http.ResponseWriter, r *http.Request) {
 		case frame := <-client.ch:
 			now := time.Now()
 			lastRaw = append(lastRaw[:0], frame...)
-			outFrame := rt.frameForOutput(frame, now)
 			lastRealFrameAt = now
 			lastWriteAt = now
 			resetTimer(idle, videoClientIdle)
-			if err := writeMJPEGFrame(w, outFrame); err != nil {
+			if err := writeMJPEGFrame(w, frame); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -3363,7 +3461,7 @@ func (rt *CameraRuntime) ServeVideo(w http.ResponseWriter, r *http.Request) {
 			}
 			lastWriteAt = now
 			resetTimer(idle, videoClientIdle)
-			if err := writeMJPEGFrame(w, rt.frameForOutput(lastRaw, now)); err != nil {
+			if err := writeMJPEGFrame(w, lastRaw); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -3380,10 +3478,16 @@ func (rt *CameraRuntime) recoverVideoForClient() {
 	rt.mu.RUnlock()
 	if !connectedAt.IsZero() {
 		now := time.Now()
-		waitingForFirstFrame := lastVideoAt.IsZero() && now.Sub(connectedAt) > videoStaleWindow
-		staleFrame := !lastVideoAt.IsZero() && now.Sub(lastVideoAt) > videoStaleWindow
+		waitingForFirstFrame := lastVideoAt.IsZero() && now.Sub(connectedAt) > mediaRestartWindow
+		staleFrame := !lastVideoAt.IsZero() && now.Sub(lastVideoAt) > mediaRestartWindow
+		waitingForFirstFrameNudge := lastVideoAt.IsZero() && now.Sub(connectedAt) > videoStaleWindow
+		staleFrameNudge := !lastVideoAt.IsZero() && now.Sub(lastVideoAt) > videoStaleWindow
 		if waitingForFirstFrame || staleFrame {
 			if rt.restart("client requested stale video") {
+				return
+			}
+		} else if waitingForFirstFrameNudge || staleFrameNudge {
+			if rt.nudgeStreams("client requested stale video") {
 				return
 			}
 		}
@@ -3434,7 +3538,11 @@ func (rt *CameraRuntime) frameForOutput(frame []byte, at time.Time) []byte {
 	})
 	if err != nil {
 		log.Printf("camera %s overlay failed: %s", cfg.ID, err)
-		return frame
+		atomic.AddUint64(&rt.invalidVideoFrames, 1)
+		rt.mu.Lock()
+		rt.lastInvalidVideoAt = time.Now()
+		rt.mu.Unlock()
+		return nil
 	}
 	return out
 }
@@ -3459,6 +3567,13 @@ func jpegFrameSize(frame []byte) (int, int, bool) {
 		return 0, 0, false
 	}
 	return cfg.Width, cfg.Height, true
+}
+
+func validateJPEGFrame(frame []byte) (int, int, bool) {
+	if len(frame) < 2 || frame[0] != 0xff || frame[1] != 0xd8 {
+		return 0, 0, false
+	}
+	return jpegFrameSize(frame)
 }
 
 func resolutionLabel(width, height int) string {
@@ -3587,7 +3702,8 @@ func (rt *CameraRuntime) ServeSnapshot(w http.ResponseWriter, r *http.Request) {
 	rt.mu.Lock()
 	rt.lastSnapshotDemand = time.Now()
 	frame := append([]byte(nil), rt.latestFrame...)
-	fresh := !rt.lastVideoAt.IsZero() && time.Since(rt.lastVideoAt) <= videoStaleWindow
+	frameAt := rt.lastVideoAt
+	fresh := !frameAt.IsZero() && time.Since(frameAt) <= videoStaleWindow
 	state, _ := rt.healthLocked()
 	rt.mu.Unlock()
 	rt.requestStreams(false)
@@ -3598,7 +3714,8 @@ func (rt *CameraRuntime) ServeSnapshot(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(200 * time.Millisecond)
 			rt.mu.Lock()
 			frame = append(frame[:0], rt.latestFrame...)
-			fresh = !rt.lastVideoAt.IsZero() && time.Since(rt.lastVideoAt) <= videoStaleWindow
+			frameAt = rt.lastVideoAt
+			fresh = !frameAt.IsZero() && time.Since(frameAt) <= videoStaleWindow
 			state, _ = rt.healthLocked()
 			rt.mu.Unlock()
 			if len(frame) > 0 && fresh && state != "offline" && state != "disabled" {
@@ -3606,13 +3723,24 @@ func (rt *CameraRuntime) ServeSnapshot(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if len(frame) == 0 || !fresh || state == "offline" || state == "disabled" {
+	holdable := len(frame) > 0 && !frameAt.IsZero() && time.Since(frameAt) <= videoHoldWindow && state != "disabled"
+	if len(frame) == 0 || (!fresh && !holdable) || state == "disabled" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "snapshot not ready", "camera": rt.cfg.ID, "healthState": state})
 		return
 	}
 	frame = rt.frameForOutput(frame, time.Now())
+	if len(frame) == 0 {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "snapshot frame invalid", "camera": rt.cfg.ID, "healthState": state})
+		return
+	}
 	w.Header().Set("content-type", "image/jpeg")
 	w.Header().Set("cache-control", "no-store")
+	if !fresh || state == "offline" {
+		w.Header().Set("x-bkcam-stale", "true")
+		if age := ageMs(frameAt); age != nil {
+			w.Header().Set("x-bkcam-frame-age-ms", fmt.Sprint(age))
+		}
+	}
 	w.Header().Set("content-length", strconv.Itoa(len(frame)))
 	_, _ = w.Write(frame)
 }

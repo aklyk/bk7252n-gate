@@ -309,3 +309,50 @@ UI/UX rule for these tests:
 - readback results are shown as raw JSON for debugging, but dangerous write
   commands stay hidden;
 - the setup wizard remains step-by-step and local-only, with no UART wording.
+
+### Buffer-Stall Recheck On 2026-07-01
+
+Runtime logs from the Go backend showed repeated `a9_test` sequences:
+
+- `media nudge: video stale`;
+- `restarting: video timeout` or `restarting: client requested stale video`;
+- a new PPPP peer port after reconnect.
+
+During those incidents the backend process stayed alive and the camera often
+continued responding to PPPP reconnects. This points at media starvation inside
+the camera/PPCS path rather than a web server crash. Occasional
+`invalid JPEG format` overlay errors mean that some received frames were already
+damaged or truncated before overlay rendering.
+
+UART was checked again on `/dev/cu.usbserial-0001` at 115200 8N1. Passive
+capture during an MJPEG request produced no bytes, and read-only shell probes
+(`version`, `video_buffer`, `free`, `ps`) also produced no response. For live
+`video_buffer` counters, capture boot output after a power cycle first.
+
+Backend-side mitigations added after this recheck:
+
+- healthy stream refresh was relaxed from 6 seconds to 30 seconds so the
+  rate-sensitive `stream video=<mode>` handler is not poked constantly while
+  frames are flowing;
+- client-triggered recovery now prefers media nudge inside the short stale
+  window and leaves full PPPP restart to the longer media timeout;
+- audio-stale recovery no longer runs the video media-nudge path while video is
+  active, because the old path sent `stream video=0` before restarting video and
+  could create the very stall it was trying to heal;
+- invalid JPEG frames are dropped before they reach Safari/VLC/Frigate;
+- overlay/output fanout renders one outgoing frame and shares it across HTTP
+  clients, avoiding repeated JPEG decode/encode work per Safari/VLC/Frigate
+  consumer;
+- live MJPEG and snapshots can reuse the last valid frame during a short
+  reconnect, making a stall look like a temporary freeze instead of a broken
+  response.
+
+Remaining likely pressure sources, in order of practical impact:
+
+- VGA MJPEG around 1.1-1.3 Mbps on the weak A9/PPCS stack;
+- multiple browser/VLC/Frigate consumers making the gateway maintain active
+  output clients;
+- audio clients when no useful audio frames arrive; with the fixed gateway this
+  should not reset video, but it still wastes camera/PPCS bandwidth;
+- camera-originated push/upload work when events fire;
+- weak 2.4 GHz RSSI/router airtime jitter.
