@@ -46,24 +46,31 @@ const (
 	msgAliveAck byte = 0xe1
 	msgClose    byte = 0xf0
 
-	audioSampleRate      = 8000
-	audioChannels        = 1
-	audioBytesPerSample  = 2
-	metricWindow         = 5 * time.Second
-	onlineTrafficWindow  = 15 * time.Second
-	staleTrafficWindow   = 45 * time.Second
-	trafficRestartWindow = 60 * time.Second
-	streamRequestWindow  = 2 * time.Second
-	videoRefreshWindow   = 30 * time.Second
-	videoStaleWindow     = 8 * time.Second
-	audioStaleWindow     = 4 * time.Second
-	mediaRestartWindow   = 16 * time.Second
-	mediaNudgeCooldown   = 8 * time.Second
-	restartCooldown      = 5 * time.Second
-	videoHoldInterval    = 1 * time.Second
-	videoHoldWindow      = 75 * time.Second
-	videoClientIdle      = 90 * time.Second
-	audioClientIdle      = 30 * time.Second
+	audioSampleRate       = 8000
+	audioChannels         = 1
+	audioBytesPerSample   = 2
+	audioOutputGain       = 12.0
+	audioHighpassPole     = 0.90
+	audioLowpassAlpha     = 0.68
+	audioNoiseFloorStart  = 120.0
+	audioGateMinThreshold = 220.0
+	audioGateClosedGain   = 0.12
+	audioLimiterCeiling   = 28000.0
+	metricWindow          = 5 * time.Second
+	onlineTrafficWindow   = 15 * time.Second
+	staleTrafficWindow    = 45 * time.Second
+	trafficRestartWindow  = 60 * time.Second
+	streamRequestWindow   = 2 * time.Second
+	videoRefreshWindow    = 30 * time.Second
+	videoStaleWindow      = 8 * time.Second
+	audioStaleWindow      = 4 * time.Second
+	mediaRestartWindow    = 16 * time.Second
+	mediaNudgeCooldown    = 8 * time.Second
+	restartCooldown       = 5 * time.Second
+	videoHoldInterval     = 1 * time.Second
+	videoHoldWindow       = 75 * time.Second
+	videoClientIdle       = 90 * time.Second
+	audioClientIdle       = 30 * time.Second
 
 	cmdSetSysparms = 9100
 	cmdGetSysparms = 9101
@@ -328,7 +335,10 @@ type PPPP struct {
 	videoMu    sync.Mutex
 	videoFrame *videoFrame
 
-	audio ADPCMDecoder
+	audio               ADPCMDecoder
+	audioFilter         AudioProcessor
+	hasAudioMediaIndex  bool
+	lastAudioMediaIndex uint32
 
 	OnPacket    func(Packet, *net.UDPAddr)
 	OnConnected func(*net.UDPAddr)
@@ -347,9 +357,24 @@ type videoFrame struct {
 	chunks         map[int][]byte
 }
 
+type audioMediaFrame struct {
+	data     []byte
+	index    uint32
+	hasIndex bool
+	reset    bool
+}
+
 type ADPCMDecoder struct {
 	index   int
 	valPred int
+}
+
+type AudioProcessor struct {
+	prevInput  float64
+	prevOutput float64
+	lowpass    float64
+	gateGain   float64
+	noiseFloor float64
 }
 
 var indexTable = [16]int{-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8}
@@ -3920,18 +3945,56 @@ func (p *PPPP) handleDRW(pkt Packet) {
 			p.OnVideo(frame, pkt.Index)
 		}
 	case 2:
-		raw := pkt.Data
-		if bytes.HasPrefix(raw, []byte{0x55, 0xaa, 0x15, 0xa8, 0xaa, 0x01}) {
-			if len(raw) < 0x20 {
-				return
+		var pcm []byte
+		for _, frame := range p.parseAudioFrames(pkt.Data) {
+			if frame.hasIndex {
+				if p.hasAudioMediaIndex && !mediaIndexAfter(frame.index, p.lastAudioMediaIndex) {
+					continue
+				}
+				p.lastAudioMediaIndex = frame.index
+				p.hasAudioMediaIndex = true
 			}
-			raw = raw[0x20:]
+			if frame.reset {
+				p.audio.Reset()
+			}
+			pcm = append(pcm, p.audio.Decode(frame.data)...)
 		}
-		pcm := p.audio.Decode(raw)
 		if len(pcm) > 0 && p.OnAudio != nil {
+			p.audioFilter.Process(pcm)
 			p.OnAudio(pcm, pkt.Index)
 		}
 	}
+}
+
+func (p *PPPP) parseAudioFrames(raw []byte) []audioMediaFrame {
+	const mediaHeaderLen = 32
+	magic := []byte{0x55, 0xaa, 0x15, 0xa8}
+	var frames []audioMediaFrame
+	pos := 0
+	for pos+mediaHeaderLen <= len(raw) && bytes.HasPrefix(raw[pos:], magic) {
+		payloadLen := int(binary.LittleEndian.Uint32(raw[pos+16 : pos+20]))
+		if payloadLen <= 0 || pos+mediaHeaderLen+payloadLen > len(raw) {
+			break
+		}
+		frames = append(frames, audioMediaFrame{
+			data:     raw[pos+mediaHeaderLen : pos+mediaHeaderLen+payloadLen],
+			index:    binary.LittleEndian.Uint32(raw[pos+12 : pos+16]),
+			hasIndex: true,
+			reset:    true,
+		})
+		pos += mediaHeaderLen + payloadLen
+	}
+	if len(frames) > 0 && pos == len(raw) {
+		return frames
+	}
+	if bytes.HasPrefix(raw, []byte{0x55, 0xaa, 0x15, 0xa8, 0xaa, 0x01}) && len(raw) >= mediaHeaderLen {
+		return []audioMediaFrame{{data: raw[mediaHeaderLen:], reset: true}}
+	}
+	return []audioMediaFrame{{data: raw}}
+}
+
+func mediaIndexAfter(index, previous uint32) bool {
+	return index != previous && uint32(index-previous) < 1<<31
 }
 
 func (p *PPPP) handleVideo(pkt Packet) []byte {
@@ -4150,9 +4213,13 @@ func decrypt(buf []byte, key [4]byte) []byte {
 	return out
 }
 
+func (d *ADPCMDecoder) Reset() {
+	d.index = 0
+	d.valPred = 0
+}
+
 func (d *ADPCMDecoder) Decode(in []byte) []byte {
 	out := make([]byte, 0, len(in)*4)
-	step := stepTable[d.index]
 	for _, input := range in {
 		for nib := 0; nib < 2; nib++ {
 			var delta int
@@ -4170,6 +4237,7 @@ func (d *ADPCMDecoder) Decode(in []byte) []byte {
 			}
 			sign := delta & 8
 			delta &= 7
+			step := stepTable[d.index]
 			vpdiff := step >> 3
 			if delta&4 != 0 {
 				vpdiff += step
@@ -4191,11 +4259,62 @@ func (d *ADPCMDecoder) Decode(in []byte) []byte {
 			if d.valPred < -32768 {
 				d.valPred = -32768
 			}
-			step = stepTable[d.index]
 			out = binary.LittleEndian.AppendUint16(out, uint16(int16(d.valPred)))
 		}
 	}
 	return out
+}
+
+func (p *AudioProcessor) Process(pcm []byte) {
+	if len(pcm) < audioBytesPerSample {
+		return
+	}
+
+	samples := make([]float64, 0, len(pcm)/audioBytesPerSample)
+	var energy float64
+	for i := 0; i+1 < len(pcm); i += 2 {
+		x := float64(int16(binary.LittleEndian.Uint16(pcm[i : i+2])))
+		y := x - p.prevInput + audioHighpassPole*p.prevOutput
+		p.prevInput = x
+		p.prevOutput = y
+		p.lowpass += audioLowpassAlpha * (y - p.lowpass)
+		y = p.lowpass
+		samples = append(samples, y)
+		energy += y * y
+	}
+
+	rms := math.Sqrt(energy / float64(len(samples)))
+	if p.noiseFloor <= 0 {
+		p.noiseFloor = audioNoiseFloorStart
+	}
+	if rms < p.noiseFloor*1.8 || rms < audioNoiseFloorStart*1.3 {
+		p.noiseFloor = 0.995*p.noiseFloor + 0.005*rms
+	}
+
+	gateThreshold := math.Max(audioGateMinThreshold, p.noiseFloor*3.0)
+	targetGate := 1.0
+	if rms < gateThreshold {
+		ratio := rms / gateThreshold
+		targetGate = audioGateClosedGain + (1-audioGateClosedGain)*math.Pow(ratio, 3)
+		if targetGate < audioGateClosedGain {
+			targetGate = audioGateClosedGain
+		}
+	}
+	if p.gateGain <= 0 {
+		p.gateGain = targetGate
+	} else if targetGate > p.gateGain {
+		p.gateGain += (targetGate - p.gateGain) * 0.65
+	} else {
+		p.gateGain += (targetGate - p.gateGain) * 0.12
+	}
+
+	gain := audioOutputGain * p.gateGain
+	for i, sample := range samples {
+		y := sample * gain
+		y = audioLimiterCeiling * math.Tanh(y/audioLimiterCeiling)
+		offset := i * audioBytesPerSample
+		binary.LittleEndian.PutUint16(pcm[offset:offset+audioBytesPerSample], uint16(int16(math.Round(y))))
+	}
 }
 
 func appendMetric(points []metricPoint, at time.Time, bytes int) []metricPoint {

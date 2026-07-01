@@ -356,3 +356,46 @@ Remaining likely pressure sources, in order of practical impact:
   should not reset video, but it still wastes camera/PPCS bandwidth;
 - camera-originated push/upload work when events fire;
 - weak 2.4 GHz RSSI/router airtime jitter.
+
+## Audio Decode Notes
+
+The A9 test camera's channel-2 payload is not a bare ADPCM byte stream. It uses
+one or more media frames per PPPP DRW payload:
+
+- 32-byte media header starting with `55 aa 15 a8`;
+- codec/type bytes observed as `0b 00` on the tested unit;
+- frame index at header offset `0x0c`;
+- ADPCM payload length at offset `0x10`, observed as `160` bytes;
+- payload data after the 32-byte header.
+
+Some DRW payloads aggregate two such frames. Some frame indexes can be received
+again later, so duplicate media frame indexes must be dropped.
+
+The previous gateway code only stripped the older `55 aa 15 a8 aa 01` header
+shape and decoded the rest of channel 2 as continuous IMA ADPCM. On this camera
+that fed media headers and duplicate frames into the ADPCM predictor, producing
+heavy DC offset/clipping and unintelligible audio.
+
+The Go backend now parses the media header, decodes only the `160` byte payload,
+resets the ADPCM predictor at each media-frame boundary, drops duplicate frame
+indexes, then applies a light output stage:
+
+- voice-focused high-pass/low-pass filtering;
+- adaptive gate/expander for background noise between speech bursts;
+- moderate output gain for the very low decoded mic level;
+- soft limiter before serving PCM/WAV.
+
+Measured effect on a quiet-room capture:
+
+- before: `DC offset ~= 0.90`, near-0 dBFS RMS, many clipped samples;
+- after parsing/reset: `DC offset ~= 0`, no clipping, but peak around `-33 dB`;
+- after the first output gain/filter pass: peak around `-12 dB` on the sample
+  capture;
+- after speech testing, fixed gain was replaced with a voice chain. A too-loud
+  voice sample showed full-scale clipping with the fixed `16x` gain, while the
+  first 8 seconds of room noise sat around `-28 dB RMS`. The current profile
+  lowers base gain, narrows the speech band, gates low-level background noise,
+  and uses a soft limiter so normal speech does not clip;
+- controlled laptop TTS capture with the current profile: pre-speech room noise
+  around `-56 dB RMS`, speech around `-28 dB RMS`, peak around `-3.5 dB`, with
+  no full-scale clipping.
