@@ -20,6 +20,7 @@ local-private/
 *.mjpg
 *.wav
 *.raw
+/.bkcam.pid
 
 # Generated archives and proprietary blobs
 *.zip
