@@ -1563,8 +1563,10 @@ func (a *App) handleCamera(w http.ResponseWriter, r *http.Request) {
 		rt.ServeAudio(w, r, true)
 	case "audio.raw":
 		rt.ServeAudio(w, r, false)
-	case "snapshot.jpg", "preview.jpg":
-		rt.ServeSnapshot(w, r)
+	case "snapshot.jpg":
+		rt.ServeSnapshot(w, r, true)
+	case "preview.jpg":
+		rt.ServeSnapshot(w, r, false)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown camera endpoint", "id": id})
 	}
@@ -1715,7 +1717,7 @@ func renderCameraPanel(c, config map[string]any, lang string, detail bool) strin
 	}
 	state := htmlValue(stateClass)
 	label := htmlValue(labelRaw)
-	media := fmt.Sprintf(`<a href="/cam/%s"><img data-preview="%s" src="/cam/%s/snapshot.jpg?ts=%d" alt="%s preview"></a>`,
+	media := fmt.Sprintf(`<a href="/cam/%s"><img data-preview="%s" src="/cam/%s/preview.jpg?ts=%d" alt="%s preview"></a>`,
 		pathID, htmlValue(id), pathID, time.Now().UnixMilli(), name)
 	if detail {
 		media = fmt.Sprintf(`<img data-live="%s" src="/cam/%s/video.mjpg?ts=%d" alt="%s live video">`,
@@ -1944,7 +1946,7 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
     const audioPlayers = new Map()
     const liveReconnectAt = new Map()
     const LIVE_RECONNECT_MS = 25000
-    const PREVIEW_REFRESH_MS = 2000
+    const PREVIEW_REFRESH_MS = 5000
 
     function cameraPath(id, suffix) {
       return '/cam/' + encodeURIComponent(id) + suffix
@@ -1953,7 +1955,7 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
     function refreshPreviews() {
       for (const img of document.querySelectorAll('img[data-preview]')) {
         const id = img.dataset.preview
-        img.src = cameraPath(id, '/snapshot.jpg?ts=') + Date.now()
+        img.src = cameraPath(id, '/preview.jpg?ts=') + Date.now()
       }
     }
 
@@ -2659,7 +2661,7 @@ func (rt *CameraRuntime) Start() {
 		}
 		rt.mu.Lock()
 		rt.videoMetric = appendMetric(trimMetric(rt.videoMetric, now), now, len(frame))
-		rt.latestFrame = append(rt.latestFrame[:0], frame...)
+		rt.latestFrame = frame
 		rt.lastVideoAt = now
 		rt.lastTraffic = now
 		rt.lastFrameBytes = len(frame)
@@ -2718,7 +2720,7 @@ func (rt *CameraRuntime) Start() {
 }
 
 func (rt *CameraRuntime) enqueueVideoOutput(frame []byte, at time.Time) {
-	job := videoOutputJob{frame: append([]byte(nil), frame...), at: at}
+	job := videoOutputJob{frame: frame, at: at}
 	select {
 	case rt.videoOutputCh <- job:
 		return
@@ -2743,7 +2745,7 @@ func (rt *CameraRuntime) videoOutputLoop() {
 				continue
 			}
 			rt.mu.Lock()
-			rt.latestOutputFrame = append(rt.latestOutputFrame[:0], out...)
+			rt.latestOutputFrame = out
 			clients := keys(rt.videoClients)
 			rt.mu.Unlock()
 			for _, c := range clients {
@@ -3868,17 +3870,21 @@ func (rt *CameraRuntime) ServeAudio(w http.ResponseWriter, r *http.Request, wav 
 	}
 }
 
-func (rt *CameraRuntime) ServeSnapshot(w http.ResponseWriter, r *http.Request) {
+func (rt *CameraRuntime) ServeSnapshot(w http.ResponseWriter, r *http.Request, force bool) {
 	rt.Start()
 	rt.mu.Lock()
-	rt.lastSnapshotDemand = time.Now()
+	if force {
+		rt.lastSnapshotDemand = time.Now()
+	}
 	frame := append([]byte(nil), rt.latestFrame...)
 	frameAt := rt.lastVideoAt
 	fresh := !frameAt.IsZero() && time.Since(frameAt) <= videoStaleWindow
 	state, _ := rt.healthLocked()
 	rt.mu.Unlock()
-	rt.requestStreams(false)
-	if len(frame) == 0 || !fresh || state == "offline" || state == "disabled" {
+	if force {
+		rt.requestStreams(false)
+	}
+	if force && (len(frame) == 0 || !fresh || state == "offline" || state == "disabled") {
 		rt.recoverVideoForClient()
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
@@ -3956,6 +3962,7 @@ func (p *PPPP) Run() {
 	defer conn.Close()
 	go p.discoveryLoop()
 	buf := make([]byte, 2048)
+	plainBuf := make([]byte, 2048)
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 		n, remote, err := conn.ReadFromUDP(buf)
@@ -3971,16 +3978,15 @@ func (p *PPPP) Run() {
 			}
 			return
 		}
-		msg := append([]byte(nil), buf[:n]...)
 		if !p.acceptsPeer(remote) {
 			continue
 		}
-		plain := decrypt(msg, p.key)
+		plain := decryptInto(plainBuf[:n], buf[:n], p.key)
 		pkt, ok := parsePacket(plain)
 		if !ok {
 			continue
 		}
-		p.handlePacket(pkt, msg, remote)
+		p.handlePacket(pkt, buf[:n], remote)
 	}
 }
 
@@ -4212,7 +4218,7 @@ func (p *PPPP) handleVideo(pkt Packet) []byte {
 }
 
 func buildVideoFrame(vf *videoFrame, allowBoundaryComplete bool) []byte {
-	var out []byte
+	out := make([]byte, 0, vf.expectedLength)
 	total := 0
 	for i := 0; i <= vf.maxSlot; i++ {
 		chunk, ok := vf.chunks[i]
@@ -4350,6 +4356,11 @@ func encrypt(buf []byte, key [4]byte) []byte {
 
 func decrypt(buf []byte, key [4]byte) []byte {
 	out := make([]byte, len(buf))
+	return decryptInto(out, buf, key)
+}
+
+func decryptInto(out, buf []byte, key [4]byte) []byte {
+	out = out[:len(buf)]
 	prev := byte(0)
 	for i, b := range buf {
 		idx := byte(int(key[prev&3]) + int(prev))
@@ -4508,9 +4519,9 @@ func keys(m map[*Client]struct{}) []*Client {
 }
 
 func sendDropOld(ch chan []byte, data []byte) {
-	frame := append([]byte(nil), data...)
+	// Callers publish immutable frame/PCM slices; avoid per-client copies in the hot path.
 	select {
-	case ch <- frame:
+	case ch <- data:
 		return
 	default:
 	}
@@ -4519,7 +4530,7 @@ func sendDropOld(ch chan []byte, data []byte) {
 	default:
 	}
 	select {
-	case ch <- frame:
+	case ch <- data:
 	default:
 	}
 }
