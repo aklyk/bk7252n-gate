@@ -799,20 +799,20 @@ func tr(lang, key string) string {
 
 var uiText = map[string]map[string]string{
 	"ru": {
-		"dashboard": "Камеры", "setup": "Настройка", "status": "Статус", "setupNew": "Добавить камеру",
-		"overviewMeta": "На главной легкие превью; живой поток и звук открываются в карточке камеры.",
-		"openLive":     "Открыть live", "sound": "Звук", "stop": "Стоп", "reconnectVideo": "Переподключить видео", "snapshot": "Снимок", "rawMJPEG": "MJPEG напрямую", "rawWAV": "WAV напрямую",
+		"dashboard": "Обзор", "setup": "Мастер", "status": "API статус", "setupNew": "Добавить камеру",
+		"overviewMeta": "Повседневный экран: превью, состояние камер и быстрый переход к live.",
+		"openLive":     "Открыть", "sound": "Звук", "stop": "Стоп", "reconnectVideo": "Обновить поток", "snapshot": "Снимок", "rawMJPEG": "Видео URL", "rawWAV": "Аудио URL",
 		"video": "Видео", "fps": "FPS", "videoKbps": "Видео bitrate", "audio": "Аудио", "clients": "Клиенты", "restarts": "Рестарты", "mode": "Режим", "peer": "Peer", "resolution": "Разрешение",
-		"localSettings": "Локальный профиль", "cameraSettings": "Настройки камеры", "maintenance": "Обслуживание",
-		"reconnectSession": "Переподключить сессию", "refreshInfo": "Прочитать параметры", "rebootHardware": "Перезагрузить камеру", "rebootConfirm": "Перезагрузить железо камеры?",
+		"localSettings": "Профиль шлюза", "cameraSettings": "Поток и приватность", "maintenance": "Сервис",
+		"reconnectSession": "Переподключить сессию", "refreshInfo": "Диагностика", "rebootHardware": "Перезагрузить камеру", "rebootConfirm": "Перезагрузить железо камеры?",
 		"wifiSSID": "Wi-Fi SSID", "wifiPassword": "Пароль Wi-Fi", "reboot": "Перезагрузка", "setWifi": "Записать Wi-Fi",
 		"saved": "Сохранено", "sent": "Отправлено", "writing": "Запись...", "read": "Прочитано", "apply": "Применить", "readFromCamera": "Прочитать из камеры",
 		"autoRead": "Считываю настройки...", "autoReadOk": "Настройки считаны", "autoReadTimeout": "Камера не ответила на чтение",
-		"cameraPreset": "Пресет", "presetStable320": "Стабильный 320x240 (~600 kbps)", "presetQuality640": "Качество 640x480 (~1.3 Mbps)", "presetStop": "Остановить видео", "presetCustom": "Не менять автоматически",
-		"imagePreset": "Картинка", "imageAuto": "Авто по текущему кадру", "imageBalanced": "Обычная", "imageDark": "Темная сцена", "imageGlare": "Меньше пересвета", "imageReset": "Сбросить картинку",
-		"basicDeviceHelp": "Для обычной работы выберите пресет и нужные галочки. Этого достаточно для Safari, dashboard и Frigate.",
-		"localOnlyMode":   "Локальный режим: отключить push фото/видео", "localOnlyHint": "Отключает отправку фото/видео в push-сервис камеры. WAN все равно лучше резать на роутере.",
-		"enableAudioNow": "Запустить звук сейчас", "disableDetectors": "Отключить детекцию движения и звука", "advancedSettings": "Расширенные параметры", "expertSettings": "Экспертные параметры", "rawReadback": "Сырой ответ прошивки",
+		"cameraPreset": "Режим потока", "presetStable320": "Стабильный 320", "presetQuality640": "Качество 640", "presetStop": "Стоп видео", "presetCustom": "Не менять",
+		"imagePreset": "Картинка", "imageAuto": "Авто", "imageBalanced": "Обычная", "imageDark": "Темная сцена", "imageGlare": "Меньше пересвета", "imageReset": "Сброс",
+		"basicDeviceHelp": "Эти пункты меняют настройки в самой камере по Wi-Fi.",
+		"localOnlyMode":   "Отключить push фото/видео", "localOnlyHint": "WAN для камер все равно лучше закрыть на роутере.",
+		"enableAudioNow": "Включить звук", "disableDetectors": "Отключить детекторы", "advancedSettings": "Тонкая настройка", "expertSettings": "Низкоуровневые параметры", "rawReadback": "Сырой ответ прошивки",
 		"leave": "Не менять", "streamProfile": "Поток", "streamStop": "Остановить видео", "streamQVGA": "320x240 (~600 kbps), легче для Wi-Fi", "streamVGA": "640x480 (~1.3 Mbps), больше нагрузка",
 		"audioStream": "Аудиопоток", "audioOn": "Включить", "audioOff": "Выключить", "bitrate": "Целевой битрейт", "brightness": "Яркость", "contrast": "Контраст",
 		"irCut": "IR-cut", "lamp": "Подсветка", "antiFlicker": "Anti-flicker", "rotateMirror": "Поворот/зеркало",
@@ -821,32 +821,33 @@ var uiText = map[string]map[string]string{
 		"qualityGroup": "Качество и картинка", "alarmGroup": "Детекция", "systemGroup": "Питание и облако", "cloudHardening": "Отключить push фото/видео", "cloudHardeningHelp": "Записывает isPushPic=0 и isPushVideo=0. Для приватности все равно режьте WAN камеры на роутере.",
 		"resetImage": "Сбросить картинку", "deviceReadHint": "Чтение параметров - диагностика: на этой прошивке оно может временно уронить поток. Для обычной настройки меняйте только понятные поля.",
 		"deviceConfigHelp": "Команды отправляются в стоковую прошивку по Wi-Fi через PPPP JSON. UART не нужен. Пустые поля не меняются.",
-		"deviceConfigWarn": "Разрешение stream влияет на текущую сессию. Для Frigate и dashboard локальный профиль ширины/высоты задается выше.",
-		"name":             "Имя", "cameraIP": "IP камеры", "discovery": "Discovery", "localBind": "Local bind", "psk": "PSK", "user": "Пользователь", "password": "Пароль",
-		"ackRepeats": "ACK repeats", "width": "Ширина", "height": "Высота", "requestAV": "Запрашивать AV stream", "overlayName": "Имя камеры на картинке", "overlayTime": "Дата и время на картинке", "overlayDiag": "Диагностика на картинке", "overlaySize": "Размер оверлея", "overlaySmall": "Мелкий", "overlayMedium": "Средний", "overlayLarge": "Крупный", "enabled": "Включена", "save": "Сохранить",
+		"deviceConfigWarn": "640 дает больше деталей, 320 обычно стабильнее для нескольких камер и Frigate.",
+		"name":             "Имя", "cameraIP": "IP камеры", "discovery": "Адрес подключения", "localBind": "Локальный bind", "psk": "PSK", "user": "Пользователь", "password": "Пароль",
+		"ackRepeats": "ACK repeats", "width": "Ширина", "height": "Высота", "requestAV": "Держать аудио+видео", "overlayName": "Имя камеры", "overlayTime": "Дата и время", "overlayDiag": "FPS и поток", "overlaySize": "Размер текста", "overlaySmall": "Мелкий", "overlayMedium": "Средний", "overlayLarge": "Крупный", "enabled": "Включена", "save": "Сохранить",
 		"wizardTitle": "Настройка новой камеры", "wizardMeta": "Мастер полностью локальный и работает, когда ноутбук подключен к AP камеры без интернета.",
-		"wizardStep1": "1. Подготовка", "wizardStep1Text": "Подключите ноутбук к AP камеры или к той же LAN, где камера уже доступна. Оставьте эту страницу открытой с локального сервера.",
-		"wizardStep2": "2. Записать Wi-Fi и сохранить", "wizardStep2Text": "Сервер подключится к текущему адресу камеры, отправит Wi-Fi настройки и сохранит финальный LAN-адрес в локальный конфиг.",
-		"wizardStep3": "3. Вернуться в LAN", "wizardStep3Text": "После перезагрузки подключите ноутбук обратно к целевой Wi-Fi сети. Dashboard будет использовать сохраненный LAN-адрес.",
-		"wizardStep4": "4. Уже добавленные камеры", "wizardStep4Text": "Для существующей камеры используйте карточку камеры: локальный профиль, настройки камеры и обслуживание.",
+		"wizardStep1": "1. Подключиться к AP камеры", "wizardStep1Text": "Откройте эту страницу с локального сервера, затем подключите ноутбук к Wi-Fi сети камеры.",
+		"wizardStep2": "2. Записать домашний Wi-Fi", "wizardStep2Text": "Введите текущий адрес камеры, целевую сеть и имя камеры. Сервер запишет Wi-Fi и сохранит профиль.",
+		"wizardStep3": "3. Вернуться в свою сеть", "wizardStep3Text": "После перезагрузки камеры подключите ноутбук обратно к основной Wi-Fi сети.",
+		"wizardStep4": "4. Открыть камеру", "wizardStep4Text": "Новая камера появится на главной. Если IP неизвестен, закрепите DHCP lease и обновите адрес в профиле.",
 		"targetSSID": "Целевой SSID", "targetPassword": "Пароль целевой сети", "currentIP": "Текущий IP", "currentDiscovery": "Текущий discovery",
 		"finalIP": "Финальный LAN IP", "finalDiscovery": "Финальный discovery", "cameraPassword": "Пароль камеры", "writeAndSave": "Записать и сохранить",
+		"backToOverview": "К обзору", "liveView": "Live", "currentStream": "Текущий поток", "quickActions": "Быстрые действия", "gatewayProfileHelp": "Это локальные настройки шлюза: имя, адрес, оверлей и экспорт.", "overlayGroup": "Надписи на картинке", "connectionGroup": "Адрес и доступ", "expertConnection": "Протокол и доступ", "exportLinks": "Экспорт", "openWizard": "Открыть мастер", "cameraOffline": "Камера недоступна", "settingsStatus": "Статус настройки",
 	},
 	"en": {
-		"dashboard": "Dashboard", "setup": "Setup", "status": "Status", "setupNew": "Set up new camera",
-		"overviewMeta": "Snapshot previews keep the overview light; open a camera for live video and sound.",
-		"openLive":     "Open live", "sound": "Sound", "stop": "Stop", "reconnectVideo": "Reconnect video", "snapshot": "Snapshot", "rawMJPEG": "Raw MJPEG", "rawWAV": "Raw WAV",
+		"dashboard": "Overview", "setup": "Wizard", "status": "API status", "setupNew": "Add camera",
+		"overviewMeta": "Daily view: previews, camera health and quick access to live video.",
+		"openLive":     "Open", "sound": "Sound", "stop": "Stop", "reconnectVideo": "Refresh stream", "snapshot": "Snapshot", "rawMJPEG": "Video URL", "rawWAV": "Audio URL",
 		"video": "Video", "fps": "FPS", "videoKbps": "Video bitrate", "audio": "Audio", "clients": "Clients", "restarts": "Restarts", "mode": "Mode", "peer": "Peer", "resolution": "Resolution",
-		"localSettings": "Local profile", "cameraSettings": "Camera settings", "maintenance": "Maintenance",
-		"reconnectSession": "Reconnect camera session", "refreshInfo": "Refresh camera info", "rebootHardware": "Restart camera hardware", "rebootConfirm": "Restart camera hardware?",
+		"localSettings": "Gateway profile", "cameraSettings": "Stream and privacy", "maintenance": "Service",
+		"reconnectSession": "Reconnect session", "refreshInfo": "Diagnostics", "rebootHardware": "Restart camera", "rebootConfirm": "Restart camera hardware?",
 		"wifiSSID": "Wi-Fi SSID", "wifiPassword": "Wi-Fi password", "reboot": "Reboot", "setWifi": "Set Wi-Fi",
 		"saved": "Saved", "sent": "Sent", "writing": "Writing...", "read": "Read", "apply": "Apply", "readFromCamera": "Read from camera",
 		"autoRead": "Reading settings...", "autoReadOk": "Settings read", "autoReadTimeout": "Camera did not answer readback",
-		"cameraPreset": "Preset", "presetStable320": "Stable 320x240 (~600 kbps)", "presetQuality640": "Quality 640x480 (~1.3 Mbps)", "presetStop": "Stop video", "presetCustom": "Do not auto-change",
-		"imagePreset": "Image", "imageAuto": "Auto from current frame", "imageBalanced": "Balanced", "imageDark": "Dark scene", "imageGlare": "Less glare", "imageReset": "Reset image",
-		"basicDeviceHelp": "For normal use, choose a preset and the needed checkboxes. This is enough for Safari, dashboard and Frigate.",
-		"localOnlyMode":   "Local mode: disable push photos/videos", "localOnlyHint": "Disables photo/video upload to the camera push service. Router WAN blocking is still recommended.",
-		"enableAudioNow": "Start audio now", "disableDetectors": "Disable motion and sound detection", "advancedSettings": "Advanced settings", "expertSettings": "Expert settings", "rawReadback": "Raw firmware response",
+		"cameraPreset": "Stream mode", "presetStable320": "Stable 320", "presetQuality640": "Quality 640", "presetStop": "Stop video", "presetCustom": "Keep current",
+		"imagePreset": "Image", "imageAuto": "Auto", "imageBalanced": "Balanced", "imageDark": "Dark scene", "imageGlare": "Less glare", "imageReset": "Reset",
+		"basicDeviceHelp": "These settings are written to the camera over Wi-Fi.",
+		"localOnlyMode":   "Disable push photos/videos", "localOnlyHint": "Camera WAN egress should still be blocked on the router.",
+		"enableAudioNow": "Enable audio", "disableDetectors": "Disable detectors", "advancedSettings": "Fine tuning", "expertSettings": "Low-level settings", "rawReadback": "Raw firmware response",
 		"leave": "Leave unchanged", "streamProfile": "Stream", "streamStop": "Stop video", "streamQVGA": "320x240 (~600 kbps), lighter on Wi-Fi", "streamVGA": "640x480 (~1.3 Mbps), higher load",
 		"audioStream": "Audio stream", "audioOn": "On", "audioOff": "Off", "bitrate": "Target bitrate", "brightness": "Brightness", "contrast": "Contrast",
 		"irCut": "IR-cut", "lamp": "Light", "antiFlicker": "Anti-flicker", "rotateMirror": "Rotate/mirror",
@@ -855,16 +856,17 @@ var uiText = map[string]map[string]string{
 		"qualityGroup": "Quality and image", "alarmGroup": "Detection", "systemGroup": "Power and cloud", "cloudHardening": "Disable push photos/videos", "cloudHardeningHelp": "Writes isPushPic=0 and isPushVideo=0. For privacy, still block camera WAN egress on the router.",
 		"resetImage": "Reset image", "deviceReadHint": "Readback is diagnostic: on this firmware it can briefly disrupt the stream. For normal use, change only fields you understand.",
 		"deviceConfigHelp": "Commands are sent to stock firmware over Wi-Fi via PPPP JSON. UART is not required. Empty fields are not changed.",
-		"deviceConfigWarn": "The stream resolution affects the current camera session. Frigate/dashboard width and height are set in the local profile above.",
-		"name":             "Name", "cameraIP": "Camera IP", "discovery": "Discovery", "localBind": "Local bind", "psk": "PSK", "user": "User", "password": "Password",
-		"ackRepeats": "ACK repeats", "width": "Width", "height": "Height", "requestAV": "Request AV stream", "overlayName": "Camera name on image", "overlayTime": "Date/time on image", "overlayDiag": "Diagnostics on image", "overlaySize": "Overlay size", "overlaySmall": "Small", "overlayMedium": "Medium", "overlayLarge": "Large", "enabled": "Enabled", "save": "Save",
+		"deviceConfigWarn": "640 gives more detail; 320 is usually more stable for multiple cameras and Frigate.",
+		"name":             "Name", "cameraIP": "Camera IP", "discovery": "Connection address", "localBind": "Local bind", "psk": "PSK", "user": "User", "password": "Password",
+		"ackRepeats": "ACK repeats", "width": "Width", "height": "Height", "requestAV": "Keep audio+video", "overlayName": "Camera name", "overlayTime": "Date and time", "overlayDiag": "FPS and stream", "overlaySize": "Text size", "overlaySmall": "Small", "overlayMedium": "Medium", "overlayLarge": "Large", "enabled": "Enabled", "save": "Save",
 		"wizardTitle": "New camera setup", "wizardMeta": "This wizard is fully local and keeps working when your computer is connected to a camera AP without internet.",
-		"wizardStep1": "1. Prepare", "wizardStep1Text": "Connect this computer to the camera AP or to the same LAN as the camera. Keep this page open from the local server.",
-		"wizardStep2": "2. Write Wi-Fi and save", "wizardStep2Text": "The server reaches the camera at its current address, sends Wi-Fi settings, then stores the final LAN address locally.",
-		"wizardStep3": "3. Move back to LAN", "wizardStep3Text": "After reboot, connect this computer back to the target Wi-Fi. The dashboard will use the saved LAN address.",
-		"wizardStep4": "4. Existing cameras", "wizardStep4Text": "For a saved camera, use its card: local profile, camera settings and maintenance.",
+		"wizardStep1": "1. Connect to camera AP", "wizardStep1Text": "Open this page from the local server, then connect this computer to the camera Wi-Fi network.",
+		"wizardStep2": "2. Write home Wi-Fi", "wizardStep2Text": "Enter the current camera address, target network and camera name. The server writes Wi-Fi and saves the profile.",
+		"wizardStep3": "3. Return to your LAN", "wizardStep3Text": "After the camera reboots, connect this computer back to the main Wi-Fi network.",
+		"wizardStep4": "4. Open the camera", "wizardStep4Text": "The new camera appears on the overview. If the IP is unknown, reserve DHCP and update the profile.",
 		"targetSSID": "Target SSID", "targetPassword": "Target password", "currentIP": "Current IP", "currentDiscovery": "Current discovery",
 		"finalIP": "Final LAN IP", "finalDiscovery": "Final discovery", "cameraPassword": "Camera password", "writeAndSave": "Write and save",
+		"backToOverview": "Back to overview", "liveView": "Live", "currentStream": "Current stream", "quickActions": "Quick actions", "gatewayProfileHelp": "These are gateway-local settings: name, address, overlay and export.", "overlayGroup": "Image overlay", "connectionGroup": "Address and access", "expertConnection": "Protocol and access", "exportLinks": "Export", "openWizard": "Open wizard", "cameraOffline": "Camera unavailable", "settingsStatus": "Settings status",
 	},
 }
 
@@ -1621,6 +1623,171 @@ func formatBitrateValue(v any) string {
 	return fmt.Sprintf("%.0f kbps", kbps)
 }
 
+func renderMetric(id, key, label string, value any) string {
+	return fmt.Sprintf(`<div><dt>%s</dt><dd data-field="%s:%s">%s</dd></div>`,
+		htmlValue(label), htmlValue(id), htmlValue(key), htmlValue(value))
+}
+
+func renderCameraMetrics(c map[string]any, lang string, detail bool) string {
+	t := func(key string) string { return tr(lang, key) }
+	id := fmt.Sprint(c["id"])
+	items := []string{
+		renderMetric(id, "streamResolution", t("resolution"), c["streamResolution"]),
+		renderMetric(id, "videoFps", t("fps"), c["videoFps"]),
+		renderMetric(id, "videoKbps", t("videoKbps"), formatBitrateValue(c["videoKbps"])),
+		renderMetric(id, "audioKbps", t("audio"), formatBitrateValue(c["audioKbps"])),
+	}
+	if detail {
+		items = append(items,
+			renderMetric(id, "clients", t("clients"), fmt.Sprintf("%v/%v", c["videoClients"], c["audioClients"])),
+			renderMetric(id, "restartCount", t("restarts"), c["restartCount"]),
+			renderMetric(id, "streamMode", t("mode"), c["streamMode"]),
+			renderMetric(id, "peer", t("peer"), firstNonEmpty(fmt.Sprint(c["peerAddress"]), fmt.Sprint(c["expectedAddress"]))),
+		)
+	}
+	return `<dl class="stats">` + strings.Join(items, "") + `</dl>`
+}
+
+func renderCameraActions(id, pathID, lang string, detail bool) string {
+	t := func(key string) string { return tr(lang, key) }
+	if detail {
+		return fmt.Sprintf(`<div class="toolbar action-row">
+      <button data-audio="%s">%s</button>
+      <button data-live-reconnect="%s">%s</button>
+      <a href="/cam/%s/snapshot.jpg" target="_blank">%s</a>
+      <a href="/cam/%s/video.mjpg" target="_blank">%s</a>
+      <a href="/cam/%s/audio.wav" target="_blank">%s</a>
+    </div>`, htmlValue(id), htmlValue(t("sound")), htmlValue(id), htmlValue(t("reconnectVideo")), pathID, htmlValue(t("snapshot")), pathID, htmlValue(t("rawMJPEG")), pathID, htmlValue(t("rawWAV")))
+	}
+	return fmt.Sprintf(`<div class="toolbar action-row">
+      <a class="primary" href="/cam/%s">%s</a>
+      <button data-audio="%s">%s</button>
+      <a href="/cam/%s/snapshot.jpg" target="_blank">%s</a>
+    </div>`, pathID, htmlValue(t("openLive")), htmlValue(id), htmlValue(t("sound")), pathID, htmlValue(t("snapshot")))
+}
+
+func renderMaintenancePanel(id, pathID, lang string) string {
+	t := func(key string) string { return tr(lang, key) }
+	return fmt.Sprintf(`<details class="panel service-panel">
+      <summary>%s</summary>
+      <div class="toolbar maintenance">
+        <button data-command="restart" data-id="%s">%s</button>
+        <button data-command="params" data-id="%s">%s</button>
+        <button data-command="reboot" data-confirm="%s" data-id="%s">%s</button>
+      </div>
+      <form data-wifi-camera="%s" class="config-form compact">
+        <label><span>%s</span><input name="ssid" autocomplete="off"></label>
+        <label><span>%s</span><input name="password" type="password" autocomplete="new-password"></label>
+        <label class="check"><input name="reboot" type="checkbox" checked><span>%s</span></label>
+        <button type="submit">%s</button>
+        <output></output>
+      </form>
+      <div class="toolbar export-row">
+        <a href="/cam/%s/video.mjpg" target="_blank">%s</a>
+        <a href="/cam/%s/audio.wav" target="_blank">%s</a>
+      </div>
+    </details>`,
+		htmlValue(t("maintenance")),
+		htmlValue(id), htmlValue(t("reconnectSession")),
+		htmlValue(id), htmlValue(t("refreshInfo")),
+		htmlValue(t("rebootConfirm")), htmlValue(id), htmlValue(t("rebootHardware")),
+		htmlValue(id),
+		htmlValue(t("wifiSSID")), htmlValue(t("wifiPassword")), htmlValue(t("reboot")), htmlValue(t("setWifi")),
+		pathID, htmlValue(t("rawMJPEG")), pathID, htmlValue(t("rawWAV")))
+}
+
+func renderCameraPanel(c, config map[string]any, lang string, detail bool) string {
+	t := func(key string) string { return tr(lang, key) }
+	id := fmt.Sprint(c["id"])
+	pathID := url.PathEscape(id)
+	name := htmlValue(c["name"])
+	ip := htmlValue(c["ip"])
+	stateRaw := firstNonEmpty(fmt.Sprint(c["healthState"]), "offline")
+	labelRaw := firstNonEmpty(fmt.Sprint(c["healthLabel"]), "offline")
+	stateClass := stateRaw
+	lowerLabel := strings.ToLower(labelRaw)
+	if strings.Contains(lowerLabel, "stale") || strings.Contains(lowerLabel, "waiting") || strings.Contains(lowerLabel, "reconnecting") {
+		stateClass = "stale"
+	}
+	if stateRaw == "online" && asBoolValue(c["avStream"], false) && !asBoolValue(c["videoFresh"], false) {
+		stateClass = "stale"
+		labelRaw = "no video"
+	}
+	state := htmlValue(stateClass)
+	label := htmlValue(labelRaw)
+	media := fmt.Sprintf(`<a href="/cam/%s"><img data-preview="%s" src="/cam/%s/snapshot.jpg?ts=%d" alt="%s preview"></a>`,
+		pathID, htmlValue(id), pathID, time.Now().UnixMilli(), name)
+	if detail {
+		media = fmt.Sprintf(`<img data-live="%s" src="/cam/%s/video.mjpg?ts=%d" alt="%s live video">`,
+			htmlValue(id), pathID, time.Now().UnixMilli(), name)
+	}
+
+	head := fmt.Sprintf(`<header class="camera-head">
+      <div>
+        <h2>%s</h2>
+        <p class="meta">%s · %s</p>
+      </div>
+      <span class="state %s">%s</span>
+    </header>`, name, ip, htmlValue(id), state, label)
+
+	if !detail {
+		return fmt.Sprintf(`<section class="camera-card" data-camera-id="%s">
+      %s
+      <div class="media preview-media">%s</div>
+      %s
+      <audio id="audio-%s" controls preload="none" hidden></audio>
+      %s
+    </section>`, htmlValue(id), head, media, renderCameraActions(id, pathID, lang, false), htmlValue(id), renderCameraMetrics(c, lang, false))
+	}
+
+	return fmt.Sprintf(`<section class="camera-detail" data-camera-id="%s">
+      <div class="detail-layout">
+        <section class="live-panel">
+          %s
+          <div class="media live-media">%s</div>
+          %s
+          <audio id="audio-%s" controls preload="none" hidden></audio>
+        </section>
+        <aside class="side-panel">
+          <section class="panel">
+            <h3>%s</h3>
+            %s
+          </section>
+          <section class="panel">
+            <h3>%s</h3>
+            <div class="toolbar side-actions">
+              <a href="/">%s</a>
+              <button data-command="restart" data-id="%s">%s</button>
+              <button data-live-reconnect="%s">%s</button>
+            </div>
+          </section>
+        </aside>
+      </div>
+      <div class="settings-layout">
+        <section class="panel primary-panel">
+          <h3>%s</h3>
+          %s
+        </section>
+        <section class="panel">
+          <h3>%s</h3>
+          <p class="camera-device-help">%s</p>
+          %s
+        </section>
+        %s
+      </div>
+    </section>`,
+		htmlValue(id),
+		head, media, renderCameraActions(id, pathID, lang, true), htmlValue(id),
+		htmlValue(t("currentStream")), renderCameraMetrics(c, lang, true),
+		htmlValue(t("quickActions")),
+		htmlValue(t("backToOverview")),
+		htmlValue(id), htmlValue(t("reconnectSession")),
+		htmlValue(id), htmlValue(t("reconnectVideo")),
+		htmlValue(t("cameraSettings")), renderDeviceConfigForm(id, lang),
+		htmlValue(t("localSettings")), htmlValue(t("gatewayProfileHelp")), renderCameraConfigForm(config, lang),
+		renderMaintenancePanel(id, pathID, lang))
+}
+
 func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) string {
 	lang := requestLang(r)
 	t := func(key string) string { return tr(lang, key) }
@@ -1646,115 +1813,18 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
 		manager = renderWizard(a.defaultLanDiscovery(), lang)
 	} else if cameraID == "" {
 		manager = `<section class="overview-head">
-        <div>
-          <h2>` + htmlValue(t("dashboard")) + `</h2>
-          <p class="meta">` + htmlValue(t("overviewMeta")) + `</p>
-        </div>
-        <a class="primary" href="/setup">` + htmlValue(t("setupNew")) + `</a>
-      </section>`
+	        <div>
+	          <h2>` + htmlValue(t("dashboard")) + `</h2>
+	          <p class="meta">` + htmlValue(t("overviewMeta")) + `</p>
+	        </div>
+	        <a class="primary" href="/setup">` + htmlValue(t("openWizard")) + `</a>
+	      </section>`
 	}
 
 	var cards []string
 	for _, c := range cameras {
 		id := fmt.Sprint(c["id"])
-		pathID := url.PathEscape(id)
-		name := htmlValue(c["name"])
-		ip := htmlValue(c["ip"])
-		state := htmlValue(firstNonEmpty(fmt.Sprint(c["healthState"]), "offline"))
-		label := htmlValue(firstNonEmpty(fmt.Sprint(c["healthLabel"]), "offline"))
-		media := fmt.Sprintf(`<a href="/cam/%s"><img data-preview="%s" src="/cam/%s/snapshot.jpg?ts=%d" alt="%s preview"></a>`, pathID, htmlValue(id), pathID, time.Now().UnixMilli(), name)
-		if cameraID != "" {
-			media = fmt.Sprintf(`<img data-live="%s" src="/cam/%s/video.mjpg?ts=%d" alt="%s live video">`, htmlValue(id), pathID, time.Now().UnixMilli(), name)
-		}
-		reconnectButton := ""
-		if cameraID != "" {
-			reconnectButton = fmt.Sprintf(`<button data-live-reconnect="%s">%s</button>`, htmlValue(id), htmlValue(t("reconnectVideo")))
-		}
-		cards = append(cards, fmt.Sprintf(`<section class="camera %s" data-camera-id="%s">
-      <header class="camera-head">
-        <div>
-          <h2>%s</h2>
-          <p class="meta">%s - %s</p>
-        </div>
-        <span class="state %s">%s</span>
-      </header>
-      <div class="media">%s</div>
-      <div class="toolbar">
-        <a href="/cam/%s">%s</a>
-        <button data-audio="%s">%s</button>
-        %s
-        <a href="/cam/%s/snapshot.jpg" target="_blank">%s</a>
-      </div>
-      <audio id="audio-%s" controls preload="none" hidden></audio>
-      <dl class="stats">
-        <div><dt>%s</dt><dd data-field="%s:videoFrames">%s</dd></div>
-        <div><dt>FPS</dt><dd data-field="%s:videoFps">%s</dd></div>
-        <div><dt>%s</dt><dd data-field="%s:streamResolution">%s</dd></div>
-        <div><dt>%s</dt><dd data-field="%s:videoKbps">%s</dd></div>
-        <div><dt>%s</dt><dd data-field="%s:audioFrames">%s</dd></div>
-        <div><dt>%s</dt><dd data-field="%s:healthLabel">%s</dd></div>
-        <div><dt>%s</dt><dd data-field="%s:clients">%s/%s</dd></div>
-        <div><dt>%s</dt><dd data-field="%s:restartCount">%s</dd></div>
-        <div><dt>%s</dt><dd data-field="%s:streamMode">%s</dd></div>
-        <div><dt>%s</dt><dd data-field="%s:peer">%s</dd></div>
-      </dl>
-      <details>
-        <summary>%s</summary>
-        %s
-      </details>
-      <details>
-        <summary>%s</summary>
-        %s
-      </details>
-      <details>
-        <summary>%s</summary>
-        <div class="toolbar maintenance">
-          <button data-command="restart" data-id="%s">%s</button>
-          <button data-command="params" data-id="%s">%s</button>
-          <button data-command="reboot" data-confirm="%s" data-id="%s">%s</button>
-          <a href="/cam/%s/video.mjpg" target="_blank">%s</a>
-          <a href="/cam/%s/audio.wav" target="_blank">%s</a>
-        </div>
-        <form data-wifi-camera="%s" class="config-form compact">
-          <label><span>%s</span><input name="ssid" autocomplete="off"></label>
-          <label><span>%s</span><input name="password" type="password" autocomplete="new-password"></label>
-          <label class="check"><input name="reboot" type="checkbox" checked><span>%s</span></label>
-          <button type="submit">%s</button>
-          <output></output>
-        </form>
-      </details>
-    </section>`,
-			mapBool(cameraID != "", "detail", "summary-card"), htmlValue(id), name, ip, htmlValue(id), state, label, media,
-			pathID, htmlValue(t("openLive")), htmlValue(id), htmlValue(t("sound")), reconnectButton, pathID, htmlValue(t("snapshot")), htmlValue(id),
-			htmlValue(t("video")),
-			htmlValue(id), htmlValue(c["videoFrames"]),
-			htmlValue(id), htmlValue(c["videoFps"]),
-			htmlValue(t("resolution")),
-			htmlValue(id), htmlValue(c["streamResolution"]),
-			htmlValue(t("videoKbps")),
-			htmlValue(id), htmlValue(formatBitrateValue(c["videoKbps"])),
-			htmlValue(t("audio")),
-			htmlValue(id), htmlValue(c["audioFrames"]),
-			htmlValue(t("status")),
-			htmlValue(id), label,
-			htmlValue(t("clients")),
-			htmlValue(id), htmlValue(c["videoClients"]), htmlValue(c["audioClients"]),
-			htmlValue(t("restarts")),
-			htmlValue(id), htmlValue(c["restartCount"]),
-			htmlValue(t("mode")),
-			htmlValue(id), htmlValue(c["streamMode"]),
-			htmlValue(t("peer")),
-			htmlValue(id), htmlValue(firstNonEmpty(fmt.Sprint(c["peerAddress"]), fmt.Sprint(c["expectedAddress"]))),
-			htmlValue(t("localSettings")),
-			renderCameraConfigForm(configs[id], lang),
-			htmlValue(t("cameraSettings")),
-			renderDeviceConfigForm(id, lang),
-			htmlValue(t("maintenance")),
-			htmlValue(id), htmlValue(t("reconnectSession")),
-			htmlValue(id), htmlValue(t("refreshInfo")),
-			htmlValue(t("rebootConfirm")), htmlValue(id), htmlValue(t("rebootHardware")),
-			pathID, htmlValue(t("rawMJPEG")), pathID, htmlValue(t("rawWAV")), htmlValue(id),
-			htmlValue(t("wifiSSID")), htmlValue(t("wifiPassword")), htmlValue(t("reboot")), htmlValue(t("setWifi"))))
+		cards = append(cards, renderCameraPanel(c, configs[id], lang, cameraID != ""))
 	}
 
 	return `<!doctype html>
@@ -1764,63 +1834,85 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BKCam</title>
   <style>
-    :root { color-scheme: light dark; --bg: #f5f6f8; --fg: #15171a; --muted: #667085; --line: #d8dde5; --panel: #fff; --ok: #12805c; --warn: #a15c00; }
-    @media (prefers-color-scheme: dark) { :root { --bg: #101214; --fg: #eef1f4; --muted: #98a2b3; --line: #2b3038; --panel: #181b20; --ok: #35b27f; --warn: #d99a36; } }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    header.top { height: 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
-    h1 { font-size: 18px; margin: 0; font-weight: 650; }
-    nav { display: flex; gap: 10px; align-items: center; }
-    a, button { color: inherit; }
-    nav a, .toolbar a, button, .primary { border: 1px solid var(--line); background: var(--panel); text-decoration: none; padding: 7px 10px; border-radius: 6px; font: inherit; cursor: pointer; }
-    .primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
-    main { width: min(1440px, 100%); margin: 0 auto; padding: 16px; }
-    .overview-head { margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
-    .wizard { margin-bottom: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-    .section-head { padding: 12px 14px; border-bottom: 1px solid var(--line); }
-    .steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px; }
-    .step { border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-width: 0; }
-    .step strong { display: block; margin-bottom: 6px; }
-    .step p { margin: 0; color: var(--muted); }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; align-items: start; }
-    .detail-grid { grid-template-columns: minmax(0, 980px); justify-content: center; }
-    .camera { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-    .camera-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-    h2 { font-size: 16px; margin: 0 0 2px; font-weight: 650; }
-    .meta { margin: 0; color: var(--muted); font-size: 12px; }
-    .state { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
-    .state.online { color: var(--ok); }
-    .state.stale, .state.connecting { color: var(--warn); }
-    .state.offline, .state.disabled { color: var(--muted); }
-    .media { aspect-ratio: 16 / 9; background: #050505; display: grid; place-items: center; }
-    .detail .media { aspect-ratio: 4 / 3; }
-    .media a { display: block; width: 100%; height: 100%; }
-    .media img { width: 100%; height: 100%; object-fit: contain; display: block; }
-    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
-    .maintenance { padding: 0 0 10px; border-top: 0; }
-    audio:not([hidden]) { display: block; width: calc(100% - 24px); margin: 0 12px 12px; height: 36px; }
-    .stats { margin: 0; padding: 10px 12px 12px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; border-top: 1px solid var(--line); }
-    .stats div { min-width: 0; }
-    dt { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
-    dd { margin: 0; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    details { border-top: 1px solid var(--line); padding: 10px 12px 12px; }
-    summary { cursor: pointer; color: var(--muted); font-weight: 650; margin-bottom: 10px; }
-    .config-form { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; align-items: end; }
-    .config-form.compact { grid-template-columns: repeat(3, minmax(120px, 1fr)); margin-top: 10px; }
-    label { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: 11px; }
-    label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    input, select { width: 100%; min-width: 0; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 6px; padding: 7px 8px; font: inherit; }
-    label.check { display: flex; align-items: center; gap: 8px; padding-bottom: 7px; }
-    label.check input { width: auto; }
-    output { color: var(--muted); min-height: 18px; align-self: center; }
-    .camera-device-help { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
-    .device-form > .camera-device-help { grid-column: 1 / -1; }
-    .form-section { grid-column: 1 / -1; padding: 8px 0 0; border-top: 1px solid var(--line); }
-    .form-section .config-form { margin-top: 8px; }
-    .device-output { grid-column: 1 / -1; margin: 0; max-height: 220px; overflow: auto; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 8px; font-size: 11px; white-space: pre-wrap; }
-    @media (max-width: 920px) { .steps { grid-template-columns: 1fr; } }
-    @media (max-width: 760px) { .config-form, .config-form.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-    @media (max-width: 520px) { main { padding: 10px; } .grid { grid-template-columns: 1fr; } header.top { padding: 0 12px; } nav a { display: none; } .stats { grid-template-columns: repeat(2, 1fr); } .config-form, .config-form.compact { grid-template-columns: 1fr; } }
+	    :root { color-scheme: light dark; --bg: #f4f5f7; --fg: #17191d; --muted: #667085; --line: #d7dde7; --panel: #fff; --panel-soft: #fafbfc; --accent: #0f6cbd; --accent-strong: #094f8f; --ok: #12805c; --warn: #a15c00; --bad: #b42318; }
+	    @media (prefers-color-scheme: dark) { :root { --bg: #101214; --fg: #eef1f4; --muted: #98a2b3; --line: #2b3038; --panel: #181b20; --panel-soft: #14171b; --accent: #5ba7e8; --accent-strong: #9dccf3; --ok: #35b27f; --warn: #d99a36; --bad: #ff7b72; } }
+	    * { box-sizing: border-box; }
+	    body { margin: 0; overflow-x: hidden; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+	    header.top { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 22px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 94%, transparent); position: sticky; top: 0; z-index: 2; backdrop-filter: blur(10px); }
+	    h1 { font-size: 18px; margin: 0; font-weight: 700; }
+	    nav { display: flex; gap: 10px; align-items: center; }
+	    a, button { color: inherit; }
+	    nav a, .toolbar a, button, .primary { border: 1px solid var(--line); background: var(--panel); text-decoration: none; padding: 8px 11px; border-radius: 6px; font: inherit; cursor: pointer; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; text-align: center; white-space: normal; }
+	    nav a:hover, .toolbar a:hover, button:hover { border-color: var(--accent); }
+	    .primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+	    .primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+	    main { width: min(1440px, 100%); max-width: 100%; margin: 0 auto; padding: 18px; overflow-x: hidden; }
+	    .overview-head { margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding: 0 0 14px; }
+	    .wizard { margin-bottom: 16px; }
+	    .section-head { margin-bottom: 14px; }
+	    .steps { display: grid; gap: 12px; }
+	    .step { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; min-width: 0; }
+	    .step strong { display: block; margin-bottom: 6px; font-size: 15px; }
+	    .step p { margin: 0 0 12px; color: var(--muted); }
+	    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; align-items: start; min-width: 0; }
+	    .detail-grid { display: block; }
+	    .camera-card, .panel, .live-panel { min-width: 0; max-width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+	    .camera-detail { display: grid; gap: 16px; min-width: 0; max-width: 100%; }
+	    .camera-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+	    .camera-head > div { min-width: 0; }
+	    h2 { font-size: 17px; margin: 0 0 2px; font-weight: 700; }
+	    h3 { font-size: 15px; margin: 0 0 10px; font-weight: 700; }
+	    .meta { margin: 0; color: var(--muted); font-size: 12px; }
+	    .state { font-size: 12px; font-weight: 700; border: 1px solid var(--line); border-radius: 999px; padding: 4px 8px; background: var(--panel-soft); white-space: nowrap; }
+	    .state.online { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 42%, var(--line)); }
+	    .state.stale, .state.connecting { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 42%, var(--line)); }
+	    .state.offline, .state.disabled { color: var(--muted); }
+	    .media { aspect-ratio: 16 / 9; min-width: 0; max-width: 100%; overflow: hidden; background: #050505; display: grid; place-items: center; min-height: 180px; }
+	    .live-media { aspect-ratio: 4 / 3; min-height: 320px; }
+	    .media a { display: block; width: 100%; height: 100%; }
+	    .media img { width: 100%; max-width: 100%; min-width: 0; height: 100%; object-fit: contain; display: block; }
+	    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; padding: 10px 12px; border-top: 1px solid var(--line); }
+	    .side-actions, .maintenance, .export-row { padding: 0; border-top: 0; }
+	    audio:not([hidden]) { display: block; width: calc(100% - 24px); margin: 0 12px 12px; height: 36px; }
+	    .stats { margin: 0; padding: 10px 12px 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; border-top: 1px solid var(--line); }
+	    .side-panel .stats { border-top: 0; padding: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	    .stats div { min-width: 0; background: var(--panel-soft); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+	    dt { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+	    dd { margin: 0; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	    .detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; min-width: 0; max-width: 100%; }
+	    .settings-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); gap: 16px; align-items: start; min-width: 0; max-width: 100%; }
+	    .panel { padding: 14px; }
+	    .primary-panel { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+	    details.panel { padding: 0; }
+	    details.panel > summary { padding: 14px; margin: 0; }
+	    details.panel[open] > summary { border-bottom: 1px solid var(--line); }
+	    details.panel > *:not(summary) { margin: 14px; }
+	    details.form-section { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 10px; }
+	    summary { cursor: pointer; color: var(--fg); font-weight: 700; }
+	    .config-form { display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr)); gap: 12px; align-items: end; }
+	    .config-form.compact { grid-template-columns: repeat(3, minmax(120px, 1fr)); margin-top: 10px; }
+	    .form-block { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr)); gap: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+	    .form-block:first-child { border-top: 0; padding-top: 0; }
+	    .form-block h4 { grid-column: 1 / -1; margin: 0; font-size: 13px; }
+	    label { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: 12px; }
+	    label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	    input, select { width: 100%; min-width: 0; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 6px; padding: 7px 8px; font: inherit; }
+	    label.check { display: flex; align-items: center; gap: 8px; padding-bottom: 7px; }
+	    label.check input { width: auto; }
+	    output { color: var(--muted); min-height: 18px; align-self: center; }
+	    .camera-device-help { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+	    .device-form > .camera-device-help { grid-column: 1 / -1; }
+	    .segmented { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; border: 0; padding: 0; margin: 0; }
+	    .segmented legend { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+	    .segment { position: relative; display: block; }
+	    .segment input { position: absolute; opacity: 0; pointer-events: none; }
+	    .segment span { display: flex; min-height: 38px; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-soft); color: var(--fg); padding: 8px; text-align: center; white-space: normal; }
+	    .segment input:checked + span { border-color: var(--accent); color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+	    .form-section .config-form { margin-top: 10px; }
+	    .device-output { grid-column: 1 / -1; margin: 0; max-height: 220px; overflow: auto; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 8px; font-size: 11px; white-space: pre-wrap; }
+	    @media (max-width: 1100px) { .detail-layout, .settings-layout { grid-template-columns: 1fr; } .side-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; } }
+	    @media (max-width: 760px) { header.top { align-items: flex-start; flex-direction: column; padding: 10px 14px; } nav { flex-wrap: wrap; width: 100%; } .overview-head { align-items: flex-start; flex-direction: column; } .config-form, .config-form.compact, .form-block { grid-template-columns: 1fr; } .side-panel { grid-template-columns: 1fr; } .live-media { min-height: 240px; } .toolbar > * { flex: 1 1 128px; } }
+	    @media (max-width: 520px) { main { padding: 10px; } .grid { grid-template-columns: minmax(0, 1fr); } .camera-detail, .detail-layout, .settings-layout, .side-panel, .live-panel, .panel, .camera-card { width: calc(100vw - 28px); max-width: calc(100vw - 28px); } nav a[href="/api/status"], nav a[href="/frigate.yml"], nav a[href="/go2rtc.yml"] { display: none; } nav a { flex: 0 0 auto; padding: 7px 9px; } .camera-head { align-items: flex-start; } .state { max-width: 42%; overflow: hidden; text-overflow: ellipsis; } .toolbar { display: grid; grid-template-columns: minmax(0, 1fr); } .toolbar > * { width: 100%; } .stats, .side-panel .stats { grid-template-columns: 1fr; } .media { min-height: 160px; } .segmented { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); } }
   </style>
 </head>
 <body>
@@ -1878,12 +1970,24 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       for (const img of document.querySelectorAll('img[data-live]')) reconnectLive(img.dataset.live, false)
     }
 
-    function formatBitrate(kbps) {
-      const value = Number(kbps)
-      if (!Number.isFinite(value) || value <= 0) return '0 kbps'
-      if (value >= 1000) return (value / 1000).toFixed(1) + ' Mbps'
-      return Math.round(value) + ' kbps'
-    }
+	    function formatBitrate(kbps) {
+	      const value = Number(kbps)
+	      if (!Number.isFinite(value) || value <= 0) return '0 kbps'
+	      if (value >= 1000) return (value / 1000).toFixed(1) + ' Mbps'
+	      return Math.round(value) + ' kbps'
+	    }
+
+	    function statusClass(cam) {
+	      const label = String(cam.healthLabel || '').toLowerCase()
+	      if (label.includes('stale') || label.includes('waiting') || label.includes('reconnecting')) return 'stale'
+	      if (cam.healthState === 'online' && cam.avStream && !cam.videoFresh) return 'stale'
+	      return cam.healthState || 'offline'
+	    }
+
+	    function statusLabel(cam) {
+	      if (cam.healthState === 'online' && cam.avStream && !cam.videoFresh) return 'no video'
+	      return cam.healthLabel || 'offline'
+	    }
 
     function joinBytes(a, b) {
       if (!a || a.length === 0) return b
@@ -1999,12 +2103,15 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
           }
           section = section.parentElement ? section.parentElement.closest('details.form-section') : null
         }
-        if (skip) continue
-        if (el.type === 'checkbox') data[el.name] = el.checked
-        else if (el.value !== '') data[el.name] = el.value
-      }
-      return data
-    }
+	        if (skip) continue
+	        if (el.type === 'checkbox') data[el.name] = el.checked
+	        else if (el.type === 'radio') {
+	          if (el.checked) data[el.name] = el.value
+	        }
+	        else if (el.value !== '') data[el.name] = el.value
+	      }
+	      return data
+	    }
 
     function commandData(readback, name) {
       const item = (readback.commands || []).find((cmd) => cmd.name === name)
@@ -2146,24 +2253,25 @@ func (a *App) renderPage(r *http.Request, cameraID string, mode ...string) strin
       if (form) autoReadDevice(form, false)
     }, true)
 
-    for (const form of document.querySelectorAll('details[open] form[data-device-camera]')) {
-      autoReadDevice(form, false)
-    }
+	    for (const form of document.querySelectorAll('form[data-device-camera]')) {
+	      autoReadDevice(form, false)
+	    }
 
     async function poll() {
       try {
         const res = await fetch('/api/status', { cache: 'no-store' })
         const data = await res.json()
         for (const cam of data.cameras) {
-          const el = document.querySelector('[data-camera-id="' + cam.id + '"] .state')
-          if (el) { el.textContent = cam.healthLabel || 'offline'; el.className = 'state ' + (cam.healthState || 'offline') }
+	          const el = document.querySelector('[data-camera-id="' + cam.id + '"] .state')
+	          if (el) { el.textContent = statusLabel(cam); el.className = 'state ' + statusClass(cam) }
           const fields = {
-            videoFrames: cam.videoFrames,
-            videoFps: cam.videoFps,
-            streamResolution: cam.streamResolution,
-            videoKbps: formatBitrate(cam.videoKbps),
-            audioFrames: cam.audioFrames,
-            healthLabel: cam.healthLabel,
+	            videoFrames: cam.videoFrames,
+	            videoFps: cam.videoFps,
+	            streamResolution: cam.streamResolution,
+	            videoKbps: formatBitrate(cam.videoKbps),
+	            audioKbps: formatBitrate(cam.audioKbps),
+	            audioFrames: cam.audioFrames,
+	            healthLabel: cam.healthLabel,
             clients: cam.videoClients + '/' + cam.audioClients,
             restartCount: cam.restartCount,
             streamMode: cam.streamMode,
@@ -2221,6 +2329,28 @@ func renderSelectValue(name, label string, selected any, options [][2]string) st
 	return b.String()
 }
 
+func renderRadioGroup(name, label, selected string, options [][2]string) string {
+	var b strings.Builder
+	b.WriteString(`<fieldset class="segmented"><legend>`)
+	b.WriteString(htmlValue(label))
+	b.WriteString(`</legend>`)
+	for _, option := range options {
+		b.WriteString(`<label class="segment"><input type="radio" name="`)
+		b.WriteString(htmlValue(name))
+		b.WriteString(`" value="`)
+		b.WriteString(htmlValue(option[0]))
+		b.WriteString(`"`)
+		if option[0] == selected {
+			b.WriteString(` checked`)
+		}
+		b.WriteString(`><span>`)
+		b.WriteString(htmlValue(option[1]))
+		b.WriteString(`</span></label>`)
+	}
+	b.WriteString(`</fieldset>`)
+	return b.String()
+}
+
 func renderBitrateSelect(lang string) string {
 	t := func(key string) string { return tr(lang, key) }
 	return renderSelect("bitrateKbps", t("bitrate"), [][2]string{
@@ -2241,27 +2371,38 @@ func renderCameraConfigForm(camera map[string]any, lang string) string {
 		return ""
 	}
 	t := func(key string) string { return tr(lang, key) }
-	return `<form data-update-camera="` + htmlValue(camera["id"]) + `" class="config-form">
-      ` + renderInput("name", t("name"), camera["name"], "") + `
-      ` + renderInput("ip", t("cameraIP"), camera["ip"], `inputmode="numeric" autocomplete="off"`) + `
-      ` + renderInput("discovery", t("discovery"), camera["discovery"], `inputmode="numeric" autocomplete="off"`) + `
-      ` + renderInput("localAddress", t("localBind"), camera["localAddress"], `inputmode="numeric" autocomplete="off"`) + `
-      ` + renderInput("psk", t("psk"), camera["psk"], `autocomplete="off"`) + `
-      ` + renderInput("username", t("user"), camera["username"], `autocomplete="off"`) + `
-      ` + renderInput("password", t("password"), "", `type="password" placeholder="keep current" autocomplete="new-password"`) + `
-      ` + renderInput("ackRepeats", t("ackRepeats"), camera["ackRepeats"], `type="number" min="1" max="9"`) + `
-      ` + renderInput("width", t("width"), camera["width"], `type="number" min="1"`) + `
-      ` + renderInput("height", t("height"), camera["height"], `type="number" min="1"`) + `
-      <label class="check"><input name="avStream" type="checkbox" ` + mapBool(asBoolValue(camera["avStream"], true), "checked", "") + `><span>` + htmlValue(t("requestAV")) + `</span></label>
-      <label class="check"><input name="overlayName" type="checkbox" ` + mapBool(asBoolValue(camera["overlayName"], false), "checked", "") + `><span>` + htmlValue(t("overlayName")) + `</span></label>
-      <label class="check"><input name="overlayTime" type="checkbox" ` + mapBool(asBoolValue(camera["overlayTime"], false), "checked", "") + `><span>` + htmlValue(t("overlayTime")) + `</span></label>
-      <label class="check"><input name="overlayDiag" type="checkbox" ` + mapBool(asBoolValue(camera["overlayDiag"], false), "checked", "") + `><span>` + htmlValue(t("overlayDiag")) + `</span></label>
-      ` + renderSelectValue("overlaySize", t("overlaySize"), camera["overlaySize"], [][2]string{
+	return `<form data-update-camera="` + htmlValue(camera["id"]) + `" class="config-form profile-form">
+      <section class="form-block">
+        <h4>` + htmlValue(t("connectionGroup")) + `</h4>
+        ` + renderInput("name", t("name"), camera["name"], "") + `
+        ` + renderInput("ip", t("cameraIP"), camera["ip"], `inputmode="numeric" autocomplete="off"`) + `
+        ` + renderInput("discovery", t("discovery"), camera["discovery"], `inputmode="numeric" autocomplete="off"`) + `
+        ` + renderInput("width", t("width"), camera["width"], `type="number" min="1"`) + `
+        ` + renderInput("height", t("height"), camera["height"], `type="number" min="1"`) + `
+        <label class="check"><input name="enabled" type="checkbox" ` + mapBool(asBoolValue(camera["enabled"], true), "checked", "") + `><span>` + htmlValue(t("enabled")) + `</span></label>
+        <label class="check"><input name="avStream" type="checkbox" ` + mapBool(asBoolValue(camera["avStream"], true), "checked", "") + `><span>` + htmlValue(t("requestAV")) + `</span></label>
+      </section>
+      <section class="form-block">
+        <h4>` + htmlValue(t("overlayGroup")) + `</h4>
+        <label class="check"><input name="overlayName" type="checkbox" ` + mapBool(asBoolValue(camera["overlayName"], false), "checked", "") + `><span>` + htmlValue(t("overlayName")) + `</span></label>
+        <label class="check"><input name="overlayTime" type="checkbox" ` + mapBool(asBoolValue(camera["overlayTime"], false), "checked", "") + `><span>` + htmlValue(t("overlayTime")) + `</span></label>
+        <label class="check"><input name="overlayDiag" type="checkbox" ` + mapBool(asBoolValue(camera["overlayDiag"], false), "checked", "") + `><span>` + htmlValue(t("overlayDiag")) + `</span></label>
+        ` + renderSelectValue("overlaySize", t("overlaySize"), camera["overlaySize"], [][2]string{
 		{"1", t("overlaySmall")},
 		{"2", t("overlayMedium")},
 		{"3", t("overlayLarge")},
 	}) + `
-      <label class="check"><input name="enabled" type="checkbox" ` + mapBool(asBoolValue(camera["enabled"], true), "checked", "") + `><span>` + htmlValue(t("enabled")) + `</span></label>
+      </section>
+      <details class="form-section">
+        <summary>` + htmlValue(t("expertConnection")) + `</summary>
+        <div class="config-form">
+          ` + renderInput("localAddress", t("localBind"), camera["localAddress"], `inputmode="numeric" autocomplete="off"`) + `
+          ` + renderInput("psk", t("psk"), camera["psk"], `autocomplete="off"`) + `
+          ` + renderInput("username", t("user"), camera["username"], `autocomplete="off"`) + `
+          ` + renderInput("password", t("password"), "", `type="password" placeholder="keep current" autocomplete="new-password"`) + `
+          ` + renderInput("ackRepeats", t("ackRepeats"), camera["ackRepeats"], `type="number" min="1" max="9"`) + `
+        </div>
+      </details>
       <button type="submit">` + htmlValue(t("save")) + `</button>
       <output></output>
     </form>`
@@ -2271,24 +2412,24 @@ func renderDeviceConfigForm(id, lang string) string {
 	t := func(key string) string { return tr(lang, key) }
 	leave := t("leave")
 	return `<form data-device-camera="` + htmlValue(id) + `" class="config-form device-form">
-      <p class="camera-device-help">` + htmlValue(t("basicDeviceHelp")) + `</p>
-      ` + renderSelect("preset", t("cameraPreset"), [][2]string{
+	      <p class="camera-device-help">` + htmlValue(t("basicDeviceHelp")) + `</p>
+	      ` + renderRadioGroup("preset", t("cameraPreset"), "custom", [][2]string{
+		{"custom", t("presetCustom")},
 		{"stable320", t("presetStable320")},
 		{"quality640", t("presetQuality640")},
 		{"stop", t("presetStop")},
-		{"custom", t("presetCustom")},
 	}) + `
-      ` + renderSelect("imagePreset", t("imagePreset"), [][2]string{
+	      ` + renderRadioGroup("imagePreset", t("imagePreset"), "none", [][2]string{
+		{"none", leave},
 		{"auto", t("imageAuto")},
 		{"balanced", t("imageBalanced")},
 		{"dark", t("imageDark")},
 		{"glare", t("imageGlare")},
 		{"reset", t("imageReset")},
-		{"none", leave},
 	}) + `
-      <label class="check"><input name="disablePushUpload" type="checkbox" checked><span>` + htmlValue(t("localOnlyMode")) + `</span></label>
-      <label class="check"><input name="enableAudioNow" type="checkbox"><span>` + htmlValue(t("enableAudioNow")) + `</span></label>
-      <label class="check"><input name="disableDetectors" type="checkbox"><span>` + htmlValue(t("disableDetectors")) + `</span></label>
+	      <label class="check"><input name="disablePushUpload" type="checkbox" checked><span>` + htmlValue(t("localOnlyMode")) + `</span></label>
+	      <label class="check"><input name="enableAudioNow" type="checkbox"><span>` + htmlValue(t("enableAudioNow")) + `</span></label>
+	      <label class="check"><input name="disableDetectors" type="checkbox"><span>` + htmlValue(t("disableDetectors")) + `</span></label>
       <button type="submit">` + htmlValue(t("apply")) + `</button>
       <output></output>
       <p class="camera-device-help">` + htmlValue(t("localOnlyHint")) + `</p>
@@ -2356,23 +2497,28 @@ func renderWizard(lanDiscovery, lang string) string {
         <section class="step">
           <strong>` + htmlValue(t("wizardStep2")) + `</strong>
           <p>` + htmlValue(t("wizardStep2Text")) + `</p>
-          <form data-provision-camera class="config-form">
-            <label><span>ID</span><input name="id" required pattern="[A-Za-z0-9_-]+" autocomplete="off" placeholder="a9_front"></label>
-            <label><span>` + htmlValue(t("name")) + `</span><input name="name" autocomplete="off" placeholder="Front door"></label>
-            <label><span>` + htmlValue(t("currentIP")) + `</span><input name="setupIp" placeholder="192.168.4.1" inputmode="numeric" autocomplete="off"></label>
-            <label><span>` + htmlValue(t("currentDiscovery")) + `</span><input name="setupDiscovery" placeholder="255.255.255.255" inputmode="numeric" autocomplete="off"></label>
-            <label><span>` + htmlValue(t("targetSSID")) + `</span><input name="ssid" autocomplete="off"></label>
-            <label><span>` + htmlValue(t("targetPassword")) + `</span><input name="wifiPassword" type="password" autocomplete="new-password"></label>
-            <label><span>` + htmlValue(t("finalIP")) + `</span><input name="finalIp" placeholder="optional" inputmode="numeric" autocomplete="off"></label>
-            <label><span>` + htmlValue(t("finalDiscovery")) + `</span><input name="finalDiscovery" placeholder="` + htmlValue(lanDiscovery) + `" inputmode="numeric" autocomplete="off"></label>
-            <label><span>` + htmlValue(t("psk")) + `</span><input name="psk" value="SHIX" autocomplete="off"></label>
-            <label><span>` + htmlValue(t("user")) + `</span><input name="username" value="admin" autocomplete="off"></label>
-            <label><span>` + htmlValue(t("cameraPassword")) + `</span><input name="password" type="password" value="6666" autocomplete="new-password"></label>
-            <label><span>ACK</span><input name="ackRepeats" type="number" min="1" max="9" value="3"></label>
-            <label class="check"><input name="reboot" type="checkbox" checked><span>` + htmlValue(t("reboot")) + `</span></label>
-            <button type="submit">` + htmlValue(t("writeAndSave")) + `</button>
-            <output></output>
-          </form>
+	          <form data-provision-camera class="config-form">
+	            <label><span>ID</span><input name="id" required pattern="[A-Za-z0-9_-]+" autocomplete="off" placeholder="a9_front"></label>
+	            <label><span>` + htmlValue(t("name")) + `</span><input name="name" autocomplete="off" placeholder="Front door"></label>
+	            <label><span>` + htmlValue(t("currentIP")) + `</span><input name="setupIp" placeholder="192.168.4.1" inputmode="numeric" autocomplete="off"></label>
+	            <label><span>` + htmlValue(t("targetSSID")) + `</span><input name="ssid" autocomplete="off"></label>
+	            <label><span>` + htmlValue(t("targetPassword")) + `</span><input name="wifiPassword" type="password" autocomplete="new-password"></label>
+	            <label><span>` + htmlValue(t("finalIP")) + `</span><input name="finalIp" placeholder="optional" inputmode="numeric" autocomplete="off"></label>
+	            <label class="check"><input name="reboot" type="checkbox" checked><span>` + htmlValue(t("reboot")) + `</span></label>
+	            <details class="form-section">
+	              <summary>` + htmlValue(t("advancedSettings")) + `</summary>
+	              <div class="config-form">
+	                <label><span>` + htmlValue(t("currentDiscovery")) + `</span><input name="setupDiscovery" placeholder="255.255.255.255" inputmode="numeric" autocomplete="off"></label>
+	                <label><span>` + htmlValue(t("finalDiscovery")) + `</span><input name="finalDiscovery" placeholder="` + htmlValue(lanDiscovery) + `" inputmode="numeric" autocomplete="off"></label>
+	                <label><span>` + htmlValue(t("psk")) + `</span><input name="psk" value="SHIX" autocomplete="off"></label>
+	                <label><span>` + htmlValue(t("user")) + `</span><input name="username" value="admin" autocomplete="off"></label>
+	                <label><span>` + htmlValue(t("cameraPassword")) + `</span><input name="password" type="password" value="6666" autocomplete="new-password"></label>
+	                <label><span>ACK</span><input name="ackRepeats" type="number" min="1" max="9" value="3"></label>
+	              </div>
+	            </details>
+	            <button type="submit">` + htmlValue(t("writeAndSave")) + `</button>
+	            <output></output>
+	          </form>
         </section>
         <section class="step">
           <strong>` + htmlValue(t("wizardStep3")) + `</strong>
