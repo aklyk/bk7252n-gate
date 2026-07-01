@@ -1,155 +1,132 @@
+<p align="right"><a href="README.en.md"><kbd>English</kbd></a></p>
+
 # BK7252N Gate
 
-Local gateway for cheap BK7252N/A9-style PPPP cameras.
+Локальный шлюз для дешевых BK7252N/A9 PPPP-камер. Он держит соединение с камерами в локальной сети и отдает понятный веб-интерфейс, MJPEG-видео, WAV/raw PCM-аудио, snapshot, статус API и готовые конфиги для go2rtc/Frigate.
 
-![BKCam dashboard](docs/assets/bkcam-dashboard.png)
+Прошивать камеру не нужно. UART тоже не нужен для обычной настройки: мастер работает по Wi-Fi через штатный PPPP-протокол камеры.
 
-The main service keeps a local PPPP session to each camera and exposes:
+![Интерфейс BKCam](docs/assets/bkcam-dashboard.png)
 
-- Safari/Chrome dashboard
-- compact snapshot previews on the overview page
-- separate offline setup wizard at `/setup`
-- MJPEG video
-- WAV/raw PCM audio
-- snapshots
-- status JSON
-- local setup wizard for camera AP / no-internet provisioning
-- go2rtc/Frigate config snippets
+<sub>Скриншот показывает демонстрационный вид интерфейса. Реальные превью и FPS зависят от камер, Wi-Fi и выбранного профиля потока.</sub>
 
-This is intended for cameras you own and operate on your LAN. It does not require reflashing the camera.
+## Что Уже Умеет
 
-## Quick Start
+- Обзор нескольких камер с компактными превью.
+- Live-страница камеры, которая открывается прямо в Safari/Chrome.
+- Звук через браузер и отдельные WAV/raw PCM endpoints.
+- Пошаговый мастер добавления камеры, который работает без интернета, когда ноутбук подключен к AP камеры.
+- Запись Wi-Fi настроек в камеру по Wi-Fi, без UART.
+- Простые пресеты потока: стабильный 320 и качественный 640.
+- Настройки приватности: отключение push фото/видео в камере.
+- Оверлеи на картинку: имя камеры, дата/время, FPS/поток.
+- Экспорт `/frigate.yml` и `/go2rtc.yml`.
+- Статус API для диагностики, рестартов, FPS, bitrate и fresh/stale состояния.
 
-```bash
-cd bkcam-go
-cp config.example.json config.json
-go run .
-```
+## Быстрый Старт
 
-Or from the repository root:
+Нужен Go 1.24 или новее.
 
 ```bash
-make run
+git clone https://github.com/aklyk/bk7252n-gate.git
+cd bk7252n-gate
+cp bkcam-server/config.example.json bkcam-server/config.json
 ```
 
-Open:
+Отредактируйте `bkcam-server/config.json`: укажите IP камер, имена и нужное разрешение. Для камер с DID-префиксом `EEE` локальный PPPP PSK обычно `SHIX`.
+
+Запуск:
+
+```bash
+./start.sh
+```
+
+Остановка:
+
+```bash
+./stop.sh
+```
+
+После запуска откройте:
 
 ```text
 http://<server-ip>:8088/
 ```
 
-Daily use starts on `/`: it shows lightweight camera previews and the main actions. The new-camera wizard is deliberately kept on `/setup`, so it does not get in the way during normal monitoring.
+`start.sh` сам соберет Go backend при необходимости. Если установлен `screen`, сервис стартует в `screen`. Если `screen` нет, будет использован `nohup` и pidfile `.bkcam.pid`. `stop.sh` умеет гасить оба режима и дополнительно ищет процесс по порту.
 
-Useful endpoints:
+Для разработки можно запускать напрямую:
+
+```bash
+cd bkcam-go
+go run .
+```
+
+## Как Добавить Камеру
+
+Если камера уже подключена к вашей Wi-Fi сети:
+
+1. Откройте веб-интерфейс.
+2. Нажмите `Открыть мастер`.
+3. Укажите ID, имя, текущий IP камеры и финальный LAN IP.
+4. Сохраните профиль.
+
+Если камера новая и поднимает собственную AP:
+
+1. Откройте эту страницу с локального сервера.
+2. Подключите ноутбук к Wi-Fi сети камеры.
+3. В мастере укажите текущий адрес камеры, вашу домашнюю Wi-Fi сеть и пароль.
+4. Мастер отправит `set_wifi` в камеру и сохранит локальный профиль.
+5. Верните ноутбук в домашнюю Wi-Fi сеть и откройте главную страницу.
+
+Рекомендуется закрепить DHCP lease для каждой камеры и использовать unicast `discovery`, равный IP камеры. Так одна камера не сможет случайно занять карточку другой камеры.
+
+## Полезные URL
 
 ```text
-/api/status
-/setup
-/cam/<id>/video.mjpg
-/cam/<id>/audio.wav
-/cam/<id>/audio.raw
+/                    веб-интерфейс
+/setup               мастер добавления камеры
+/api/status          JSON-статус сервиса
+/cam/<id>            страница камеры
+/cam/<id>/video.mjpg MJPEG-видео
+/cam/<id>/audio.wav  WAV-аудио
+/cam/<id>/audio.raw  raw PCM-аудио
 /cam/<id>/snapshot.jpg
-/frigate.yml
-/go2rtc.yml
+/frigate.yml         конфиг для Frigate
+/go2rtc.yml          конфиг для go2rtc
 ```
 
-Camera management API:
+## Frigate И go2rtc
 
-```text
-POST   /api/setup/provision
-GET    /api/cameras
-POST   /api/cameras
-GET    /api/cameras/<id>
-PATCH  /api/cameras/<id>
-DELETE /api/cameras/<id>
-POST   /api/cameras/<id>/wifi
-POST   /api/cameras/<id>/restart
-POST   /api/cameras/<id>/reboot
-POST   /api/cameras/<id>/params
-```
-
-For DID prefix `EEE`, the local PPPP PSK is usually `SHIX`.
-
-## Repository Layout
-
-- `bkcam-go/` - main native Go gateway and dashboard
-- `bkcam-server/` - legacy Node.js gateway kept as a reference during the Go migration
-- `PPPP/` - patched JavaScript PPPP client based on A9_PPPP
-- `a9serv/` - small C MJPEG/WAV fallback proxy
-- `pppp-dissector/` - Wireshark dissector and PPPP notes
-- `aiopppp/` - Python PPPP reference implementation
-- `docs/` - project handoff and reverse-engineering notes
-
-Generated archives, firmware dumps, local configs and captures are intentionally not tracked.
-
-Firmware command and cloud/push notes are documented in
-[`docs/research/a9_stock_firmware_dump.md`](docs/research/a9_stock_firmware_dump.md).
-
-## Frigate
-
-Open:
+Откройте:
 
 ```text
 http://<server-ip>:8088/frigate.yml
+http://<server-ip>:8088/go2rtc.yml
 ```
 
-The generated snippet uses go2rtc/ffmpeg to restream MJPEG as H.264 and the WAV/PCM endpoint as AAC/Opus audio, so Frigate can consume one RTSP stream with video and sound.
+Шлюз отдает MJPEG-видео и PCM/WAV-аудио. go2rtc/ffmpeg могут рестримить это в H.264/AAC/Opus, чтобы Frigate получил один RTSP-поток с видео и звуком.
 
-## Camera Setup
+Для нескольких камер обычно стабильнее начинать с профиля `320x240`. Если Wi-Fi хороший, можно переключать отдельные камеры на `640x480`.
 
-If a camera is already on Wi-Fi, open `/setup` or add it from the API. If a new camera exposes its own AP, connect this computer to that AP, open `/setup`, enter the camera's current AP address/discovery, target Wi-Fi credentials and the final LAN address if you already know it. The wizard sends `set_wifi` over the camera's PPPP Wi-Fi session and saves the matching local camera config. No internet is required.
+## Приватность И Китайское Облако
 
-For multiple cameras, prefer fixed DHCP leases and unicast `discovery` values equal to each camera IP. The PPPP client pins the session to the expected peer so one camera cannot silently occupy another camera card. With `avStream` enabled, the Go backend keeps the camera in audio+video stream mode even if only the MJPEG endpoint is open; this has proven more stable on weak A9 Wi-Fi links and keeps Frigate/go2rtc audio available. If Wi-Fi latency climbs under multiple MJPEG streams, set a camera to `width: 320` and `height: 240`; the backend will request the camera's lower-bandwidth `video:2` mode.
+Главная рекомендация: заблокировать камерам WAN-доступ на роутере и разрешить им только LAN-доступ к этому шлюзу.
 
-UART is not part of the wizard. It is only a manual development/recovery fallback:
-
-```text
-setenv workmode sta
-setenv ssid0 <SSID>
-setenv passwd0 <PASSWORD>
-saveenv
-reboot
-```
-
-Those settings are stored in the camera flash and survive reboots.
-
-## Router Blocking
-
-The safest anti-cloud setup is to block camera WAN egress on the router and allow
-only LAN traffic between cameras and this gateway. Firmware plaintext strings
-from this camera show these external targets:
+Из дампа прошивки и локальных параметров были найдены такие внешние цели:
 
 ```text
 120.79.76.240:9093   hardcoded cypush login endpoint
-120.76.44.223:9093   current EasyFlash push_ip/push_port value seen on the test camera
+120.76.44.223:9093   push_ip/push_port, замеченный на тестовой камере
 cn.ntp.org.cn        firmware NTP fallback
 cn.pool.ntp.org      firmware NTP fallback
 ntp1.aliyun.com      firmware NTP fallback
-114.114.114.114      only appears as a DNS CLI example; block defensively if desired
+114.114.114.114      DNS CLI example, можно блокировать защитно
 ```
 
-`ilnk.work` was not found in this camera firmware dump (`decrc2m`, raw 2 MiB
-and raw 4 MiB were checked). It is still a reasonable defensive DNS block for
-iLnk/PPCS clients or app-derived traffic; on 2026-06-30 it resolved to:
+`ilnk.work` не был найден plaintext-строкой в проверенном дампе этой камеры, но его можно блокировать защитно для iLnk/PPCS-клиентов или app-трафика.
 
-```text
-ilnk.work A     34.41.139.193
-ilnk.work AAAA  2600:1900:4001:96e:8000:1:697:b36
-```
-
-Older iLnk/cam-reverse APK research also observed these P2P hello targets, not
-confirmed as plaintext targets in this BK7252N firmware:
-
-```text
-139.155.68.77
-119.45.114.92
-162.62.63.154
-3.132.215.40
-```
-
-The firmware has a PPCS/P2P stack that can resolve servers dynamically, so
-blocking only static domains/IPs is weaker than blocking all WAN egress for
-camera IPs. Example OpenWrt firewall rule:
+Пример OpenWrt-правила для полного запрета WAN с камер:
 
 ```sh
 uci add firewall rule
@@ -163,8 +140,7 @@ uci commit firewall
 /etc/init.d/firewall reload
 ```
 
-Adjust `src_ip` to your camera DHCP reservations. If you only want DNS-level
-blocking for the known Chinese NTP names:
+Если нужен только DNS-level block:
 
 ```sh
 uci add_list dhcp.@dnsmasq[0].address='/cn.ntp.org.cn/0.0.0.0'
@@ -175,6 +151,24 @@ uci commit dhcp
 /etc/init.d/dnsmasq restart
 ```
 
-## Third-Party Code
+Подробности по прошивке и найденным параметрам: [`docs/research/a9_stock_firmware_dump.md`](docs/research/a9_stock_firmware_dump.md).
 
-This repo contains modified/reference code from multiple upstream projects. See `NOTICE.md` and per-folder license/readme files before redistributing derived work.
+## Структура Репозитория
+
+- `bkcam-go/` - основной Go backend, веб-интерфейс и PPPP gateway.
+- `bkcam-server/` - legacy Node.js gateway и локальный config path.
+- `PPPP/` - JavaScript PPPP-клиент на базе A9_PPPP.
+- `a9serv/` - маленький C MJPEG/WAV fallback proxy.
+- `aiopppp/` - Python PPPP reference implementation.
+- `pppp-dissector/` - Wireshark dissector и заметки по PPPP.
+- `docs/` - handoff, reverse engineering и research notes.
+
+Локальные конфиги, дампы прошивок, capture-файлы и архивы намеренно не хранятся в git.
+
+## Безопасность
+
+Используйте проект только с камерами, которыми вы владеете и управляете в своей сети. Это исследовательский/практический локальный gateway для замены облачной зависимости, а не инструмент для доступа к чужим устройствам.
+
+## Лицензии
+
+В репозитории есть измененный и reference-код из нескольких upstream-проектов. Перед распространением производных работ проверьте `NOTICE.md` и license/readme файлы в отдельных папках.
